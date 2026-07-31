@@ -1,0 +1,41 @@
+{
+  "name": "unischedule",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "dev:mock": "vite --mode mock",
+    "build": "tsc -b && vite build",
+    "lint": "oxlint",
+    "check:functions": "npx --yes deno@2 check --node-modules-dir=auto supabase/functions/admin/index.ts supabase/functions/sync-schedule/index.ts",
+    "preview": "vite preview",
+    "seed:sql": "node scripts/generate-seed.mjs",
+    "import:fixtures": "node scripts/dump-pdf-pages.mjs \"Ακαδημαϊκός Προγραμματισμός ΤΠΤ_ΠΠΣ 2025-2026 (1) (1).pdf\" src/lib/import/__fixtures__/calendar.json && node scripts/dump-pdf-pages.mjs \"ΠΡΟΓΡΑΜΜΑ ΠΠΣ ΕΑΡΙΝΟ 2025-2026.pdf\" src/lib/import/__fixtures__/timetable.json",
+    "import:parse": "node scripts/parse-pdfs.mjs",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.110.8",
+    "clsx": "^2.1.1",
+    "date-fns": "^4.4.0",
+    "pdfjs-dist": "^6.2.108",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "react-router-dom": "^7.18.1",
+    "zustand": "^5.0.14"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.3.3",
+    "@types/node": "^24.13.2",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.3",
+    "jsdom": "^29.1.1",
+    "oxlint": "^1.71.0",
+    "tailwindcss": "^4.3.3",
+    "typescript": "~6.0.2",
+    "vite": "^8.1.1",
+    "vitest": "^4.1.10"
+  }
+}

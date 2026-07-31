@@ -1,0 +1,431 @@
+@import 'tailwindcss';
+
+/*
+ * UniSchedule design tokens — PRD §8.1 "Design Tokens" and §20 "Anti-Patterns".
+ * Every colour in the app resolves through this block. If a hex appears in a
+ * component file, it is a bug: it means a token is missing here.
+ *
+ * Deliberately absent: any blue, purple, gradient, or green fill (§20).
+ * The only non-neutral values are the warning amber and the error red, both of
+ * which are used as 1px borders / 3px stripes, never as fills.
+ */
+@theme {
+  /* Surfaces */
+  --color-canvas: #ffffff;
+  --color-surface: #fafafa;
+  --color-subtle: #f3f4f6;
+  --color-faint: #f9fafb;
+
+  /* Text */
+  --color-ink: #111111;
+  --color-ink-hover: #1a1a1a;
+  --color-body: #374151;
+  --color-muted: #6b7280;
+  --color-faded: #9ca3af;
+
+  /* Lines */
+  --color-line: #e5e7eb;
+  --color-line-soft: #f3f4f6;
+  --color-line-faint: #f9fafb;
+  --color-line-strong: #d1d5db;
+
+  /* Status — borders and stripes only, never fills */
+  --color-warn: #f59e0b;
+  --color-warn-surface: #fff9f0;
+  --color-warn-line: #fde68a;
+  --color-danger: #ef4444;
+
+  /* Typography */
+  --font-sans:
+    'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+
+  /* Radii */
+  --radius-input: 6px;
+  --radius-btn: 8px;
+  --radius-card: 10px;
+  --radius-panel: 12px;
+  --radius-modal: 16px;
+  --radius-pill: 999px;
+
+  /* Shadows — all extremely soft (§20) */
+  --shadow-card: 0 1px 3px rgb(0 0 0 / 0.06), 0 4px 16px rgb(0 0 0 / 0.04);
+  --shadow-panel: 0 1px 3px rgb(0 0 0 / 0.06), 0 4px 20px rgb(0 0 0 / 0.04);
+  --shadow-block: 0 1px 4px rgb(0 0 0 / 0.07);
+  --shadow-block-hover: 0 4px 16px rgb(0 0 0 / 0.1);
+  --shadow-raised: 0 2px 12px rgb(0 0 0 / 0.07);
+  --shadow-pop: 0 8px 32px rgb(0 0 0 / 0.12);
+  --shadow-hero: 0 8px 40px rgb(0 0 0 / 0.06);
+  --shadow-modal: 0 24px 80px rgb(0 0 0 / 0.18);
+  --shadow-btn-hover: 0 2px 8px rgb(0 0 0 / 0.06);
+
+  /* Schedule grid geometry — see WeeklyGrid; one 30-minute slot. */
+  --spacing-slot: 28px;
+  --spacing-timeaxis: 56px;
+
+  /* Motion */
+  --animate-shimmer: shimmer 1.5s ease-in-out infinite;
+  --animate-pop-in: pop-in 120ms ease-out;
+  --animate-toast-in: toast-in 200ms ease-out;
+  --animate-toast-out: toast-out 200ms ease-in forwards;
+}
+
+@keyframes shimmer {
+  0%,
+  100% {
+    background-color: var(--color-subtle);
+  }
+  50% {
+    background-color: var(--color-line);
+  }
+}
+
+@keyframes pop-in {
+  from {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateX(16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes toast-out {
+  from {
+    opacity: 1;
+    transform: translateX(0);
+  }
+  to {
+    opacity: 0;
+    transform: translateX(16px);
+  }
+}
+
+@layer base {
+  html {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  body {
+    background-color: var(--color-canvas);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
+  }
+
+  /* §15 — every interactive element gets a visible focus ring. */
+  :focus-visible {
+    outline: 2px solid var(--color-ink);
+    outline-offset: 2px;
+  }
+
+  /* Tailwind v4's Preflight dropped the pointer cursor on buttons (it now
+   * follows the raw browser default of an arrow). Restore the hand cursor for
+   * clickable controls; disabled ones keep the default arrow. */
+  button:not(:disabled),
+  [role='button']:not(:disabled),
+  label[for],
+  select:not(:disabled),
+  summary {
+    cursor: pointer;
+  }
+
+  ::selection {
+    background-color: var(--color-subtle);
+  }
+}
+
+@layer utilities {
+  /* Truncation used by lecture blocks and course rows. */
+  .truncate-1 {
+    display: -webkit-box;
+    -webkit-line-clamp: 1;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+
+  .truncate-2 {
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+
+  /* Hide scrollbars on the mobile day strip without losing scrollability. */
+  .no-scrollbar {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+ * Print / PDF (see PrintableSchedule.tsx)
+ *
+ * The printable tree is a sibling of the screen shell, not a restyling of it:
+ * on paper we swap one subtree out for the other rather than fighting the app's
+ * layout with overrides. `.print-root` is hidden by default and revealed here.
+ * ------------------------------------------------------------------------- */
+
+.print-root {
+  display: none;
+}
+
+@media print {
+  @page {
+    size: A4 landscape;
+    margin: 10mm;
+  }
+
+  /* Backgrounds and the lecture colour stripes are the design, not decoration —
+   * without this browsers strip them from the printed output by default. */
+  html,
+  body,
+  .print-root * {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  body {
+    background: #fff;
+  }
+
+  [data-screen-shell] {
+    display: none !important;
+  }
+
+  .print-root {
+    display: block;
+    font-family: var(--font-sans);
+    color: #111;
+  }
+
+  .print-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 8mm;
+    border-bottom: 0.4mm solid #111;
+    padding-bottom: 2.5mm;
+    margin-bottom: 4mm;
+  }
+
+  .print-title {
+    font-size: 15pt;
+    font-weight: 600;
+    letter-spacing: -0.02em;
+    line-height: 1.15;
+  }
+
+  .print-sub {
+    margin-top: 1mm;
+    font-size: 8.5pt;
+    color: #4b5563;
+  }
+
+  .print-meta {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 0.6mm;
+    font-size: 7.5pt;
+    color: #6b7280;
+    text-align: right;
+  }
+
+  .print-brand {
+    font-size: 9pt;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    color: #111;
+  }
+
+  .print-empty {
+    font-size: 10pt;
+    color: #6b7280;
+  }
+
+  /* --- Weekly grid --- */
+
+  .print-grid {
+    display: grid;
+    border: 0.25mm solid #d1d5db;
+    /* A grid split across a page break is unreadable — keep it whole. */
+    break-inside: avoid;
+  }
+
+  .print-corner {
+    border-right: 0.25mm solid #e5e7eb;
+    border-bottom: 0.25mm solid #d1d5db;
+    background: #f9fafb;
+  }
+
+  .print-dayhead {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-bottom: 0.25mm solid #d1d5db;
+    border-right: 0.25mm solid #e5e7eb;
+    background: #f9fafb;
+    font-size: 8pt;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: #374151;
+  }
+
+  .print-dayhead:last-child {
+    border-right: 0;
+  }
+
+  .print-axis {
+    position: relative;
+    border-right: 0.25mm solid #e5e7eb;
+    background: #f9fafb;
+  }
+
+  .print-hour {
+    position: absolute;
+    right: 1.5mm;
+    transform: translateY(-50%);
+    font-size: 7pt;
+    font-variant-numeric: tabular-nums;
+    color: #6b7280;
+  }
+
+  .print-col {
+    position: relative;
+    border-right: 0.25mm solid #e5e7eb;
+  }
+
+  .print-col:last-child {
+    border-right: 0;
+  }
+
+  .print-rule {
+    position: absolute;
+    left: 0;
+    right: 0;
+    border-top: 0.2mm solid #f3f4f6;
+  }
+
+  .print-rule-hour {
+    border-top-color: #e5e7eb;
+  }
+
+  /* --- Lecture blocks --- */
+
+  .print-block {
+    position: absolute;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 0.3mm;
+    overflow: hidden;
+    padding: 0.8mm 1.2mm;
+    border: 0.2mm solid #e5e7eb;
+    border-left-width: 0.9mm;
+    border-left-style: solid;
+    border-radius: 0.8mm;
+    background: #fafafa;
+    break-inside: avoid;
+  }
+
+  .print-block-code {
+    font-size: 7.5pt;
+    font-weight: 600;
+    line-height: 1.15;
+    color: #111;
+  }
+
+  .print-block-time {
+    font-size: 6.5pt;
+    font-variant-numeric: tabular-nums;
+    line-height: 1.15;
+    color: #4b5563;
+  }
+
+  .print-block-room {
+    font-size: 6pt;
+    line-height: 1.15;
+    color: #6b7280;
+  }
+
+  /* --- Course details table --- */
+
+  .print-table {
+    width: 100%;
+    margin-top: 5mm;
+    border-collapse: collapse;
+    font-size: 7.5pt;
+  }
+
+  .print-caption {
+    margin-bottom: 1.5mm;
+    text-align: left;
+    font-size: 9pt;
+    font-weight: 600;
+    color: #111;
+  }
+
+  .print-table thead {
+    /* Repeat the header on every page the table spills onto. */
+    display: table-header-group;
+  }
+
+  .print-table th {
+    border-bottom: 0.3mm solid #d1d5db;
+    padding: 1.2mm 1.5mm 1.2mm 0;
+    text-align: left;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    font-size: 6.5pt;
+    color: #6b7280;
+  }
+
+  .print-table td {
+    border-bottom: 0.2mm solid #f3f4f6;
+    padding: 1.2mm 1.5mm 1.2mm 0;
+    color: #374151;
+    vertical-align: top;
+  }
+
+  .print-table tr {
+    break-inside: avoid;
+  }
+
+  .print-td-code {
+    font-weight: 600;
+    color: #111;
+  }
+
+  .print-td-time {
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+}

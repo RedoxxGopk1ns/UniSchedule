@@ -1,0 +1,18 @@
+# Normalise line endings so a checkout on Windows and one on Linux/CI produce
+# identical blobs. Without this, every file touched on Windows shows up as
+# wholly rewritten in a diff.
+* text=auto eol=lf
+
+# Binary — never normalise, never diff as text.
+*.pdf binary
+*.png binary
+*.jpg binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+
+# Generated. Collapsed in diffs so a lockfile churn does not bury a real change.
+package-lock.json linguist-generated=true -diff
+deno.lock linguist-generated=true -diff
+supabase/seed.sql linguist-generated=true
+src/lib/import/__fixtures__/*.json linguist-generated=true -diff
