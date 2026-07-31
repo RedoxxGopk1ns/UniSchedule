@@ -1,0 +1,1103 @@
+ 
+
+UniSchedule 
+
+University Weekly Planner with Google Calendar Sync 
+
+Product Requirements Document 
+
+ 
+
+Version 1.0  ·  April 2026 
+
+Status: Ready for Engineering 
+
+Prepared for: Gemini AI Studio Implementation 
+
+ 
+
+1. Executive Summary 
+
+UniSchedule is a minimalist, enterprise-grade web application for university students. It allows them to: 
+
+ 
+
+Authenticate via Google OAuth 
+
+Browse and select their enrolled lecture courses from a Supabase-backed database 
+
+View a beautiful weekly schedule on the homepage 
+
+Edit their schedule at any time 
+
+Sync automatically all schedule events to their personal Google Calendar 
+
+See an 'Upcoming Lecture' sidebar widget showing the next class of the day 
+
+ 
+
+The design language is intentionally inspired by YC-backed enterprise SaaS products such as Attio, Firecrawl, and Linear — minimalist, white-space-driven, Inter font, soft shadows, no gradients, no color noise. Every pixel must feel deliberate. 
+
+ 
+
+2. Goals & Non-Goals 
+
+Goals 
+
+Provide a frictionless onboarding: login → pick courses → schedule is live in under 60 seconds 
+
+Reflect all schedule changes in Google Calendar in real-time 
+
+Design a UI that feels premium and trustworthy, not like a student project 
+
+Work entirely in-browser with no native app 
+
+ 
+
+Non-Goals 
+
+Mobile app (web only, though must be responsive) 
+
+Grade tracking or academic performance features 
+
+Integration with any LMS (Moodle, Canvas, etc.) at v1 
+
+Push notifications (Google Calendar handles reminders) 
+
+ 
+
+3. User Personas 
+
+Primary: The Enrolled Student 
+
+Age 18–26, university student 
+
+Has a Google account (university or personal) 
+
+Wants to avoid manual data entry into Google Calendar 
+
+Values clarity and speed 
+
+ 
+
+Secondary: The Organised Student Leader 
+
+Manages club activities alongside academic schedule 
+
+Wants to quickly see conflicts and free windows 
+
+ 
+
+4. Tech Stack 
+
+ 
+
+Layer 
+
+Technology 
+
+Frontend 
+
+React (Vite) 
+
+Styling 
+
+Tailwind CSS + CSS custom properties 
+
+Font 
+
+Inter (Google Fonts) — all weights 
+
+Auth 
+
+Google OAuth 2.0 via Supabase Auth 
+
+Database 
+
+Supabase (PostgreSQL) 
+
+Calendar Sync 
+
+Google Calendar API (REST) 
+
+Hosting 
+
+Vercel or Netlify 
+
+State Management 
+
+Zustand or React Context 
+
+ 
+
+5. Supabase Data Schema 
+
+Table: lectures 
+
+This is the master table populated by the university/admin. Students do not modify this table. 
+
+ 
+
+id            uuid primary key default gen_random_uuid(), 
+
+course_code   text not null,   -- e.g. 'CS301' 
+
+course_name   text not null,   -- e.g. 'Algorithms & Data Structures' 
+
+professor     text not null,   -- e.g. 'Dr. Elena Vasquez' 
+
+room          text,            -- e.g. 'Building A, Room 204' 
+
+day_of_week   text not null,   -- 'Monday' | 'Tuesday' | ... | 'Friday' 
+
+start_time    time not null,   -- e.g. 09:00 
+
+end_time      time not null,   -- e.g. 10:30 
+
+semester      text not null,   -- e.g. 'Spring 2026' 
+
+department    text,            -- e.g. 'Computer Science' 
+
+color_tag     text             -- optional hex for UI, e.g. '#E8F0FF' 
+
+ 
+
+Table: user_schedules 
+
+Maps authenticated users to their selected lectures. 
+
+ 
+
+id              uuid primary key default gen_random_uuid(), 
+
+user_id         uuid references auth.users(id) on delete cascade, 
+
+lecture_id      uuid references lectures(id) on delete cascade, 
+
+google_event_id text,   -- returned by Google Calendar API after sync 
+
+created_at      timestamptz default now(), 
+
+unique(user_id, lecture_id) 
+
+ 
+
+Table: user_profiles 
+
+Stores Google OAuth tokens needed for Calendar API calls. 
+
+ 
+
+id                    uuid primary key references auth.users(id), 
+
+full_name             text, 
+
+avatar_url            text, 
+
+google_access_token   text, 
+
+google_refresh_token  text, 
+
+token_expires_at      timestamptz, 
+
+updated_at            timestamptz default now() 
+
+ 
+
+6. Authentication Flow 
+
+User lands on the Landing Page (unauthenticated state) 
+
+User clicks 'Sign in with Google' in the header 
+
+Supabase Auth triggers Google OAuth 2.0 with scopes: openid, email, profile, calendar, calendar.events 
+
+On success, Supabase creates the user in auth.users, stores tokens in user_profiles 
+
+User is redirected to /dashboard (authenticated home) 
+
+If no user_schedules rows yet → show Course Selection Modal immediately 
+
+If user already has a schedule → show the Dashboard directly 
+
+ 
+
+Session Persistence 
+
+Supabase handles session refresh automatically 
+
+On page reload, check supabase.auth.getSession() before rendering protected routes 
+
+ 
+
+7. Application Routes 
+
+ 
+
+Route 
+
+Auth Required 
+
+Description 
+
+/ 
+
+No 
+
+Landing page (marketing/hero) 
+
+/dashboard 
+
+Yes 
+
+Main app: schedule + upcoming sidebar 
+
+/select-courses 
+
+Yes 
+
+Course selection flow 
+
+/edit-schedule 
+
+Yes 
+
+Edit existing schedule 
+
+/auth/callback 
+
+No 
+
+OAuth redirect handler 
+
+ 
+
+8. Page-by-Page Specifications 
+
+8.1 Landing Page (/) 
+
+Purpose: Convert visitors to sign-ups. Elegant, confidence-building, minimal. 
+
+ 
+
+Header Component 
+
+Height: 56px 
+
+Background: white / 80% opacity with backdrop-blur: 8px 
+
+Border-bottom: 1px solid #F3F4F6 
+
+Position: sticky top-0 z-50 
+
+Left: Logo mark (small SVG) + 'UniSchedule' in Inter 500 
+
+Right: 'Sign in with Google' — outlined pill button, black border 1px, Inter 500 14px 
+
+ 
+
+Hero Section 
+
+Padding: 120px 0 80px 
+
+Tag pill: background #F3F4F6, text Inter 500 12px #374151, border-radius 999px 
+
+H1: Inter 700, 64px desktop / 40px mobile, color #111111, NO gradients or colour in text 
+
+Text: 'Your semester, perfectly organised.' 
+
+Subheadline: Inter 400, 18px, color #6B7280, max-width 480px 
+
+CTA: Filled black pill — background #111111, white text, Inter 500 15px, border-radius 999px 
+
+Secondary label: 'No account needed — just your Google login' — Inter 400 13px #9CA3AF 
+
+ 
+
+Product Preview Card 
+
+Background: #FAFAFA, Border: 1px solid #E5E7EB, Border-radius: 16px 
+
+Box-shadow: 0 8px 40px rgba(0,0,0,0.06) 
+
+Contains a high-fidelity screenshot mockup of the dashboard 
+
+Max-width 980px, centered 
+
+ 
+
+Design Tokens (Landing Page) 
+
+ 
+
+Token 
+
+Value 
+
+Background 
+
+#FFFFFF 
+
+Body text 
+
+#111111 
+
+Secondary text 
+
+#6B7280 
+
+Border 
+
+#E5E7EB 
+
+Card background 
+
+#FAFAFA 
+
+Accent 
+
+#111111 (black — buttons, active states only) 
+
+Hover state 
+
+#1A1A1A 
+
+Font 
+
+Inter — weights 300, 400, 500, 600, 700 
+
+Card border-radius 
+
+10px 
+
+Input border-radius 
+
+6px 
+
+Pill border-radius 
+
+999px 
+
+Shadow 
+
+0 1px 3px rgba(0,0,0,0.06), 0 4px 16px rgba(0,0,0,0.04) 
+
+ 
+
+8.2 Dashboard (/dashboard) 
+
+The core screen. Must be clean, scannable, and functional in a single glance. 
+
+ 
+
+Layout (Desktop) 
+
+Sticky header: Logo | 'Spring 2026' semester pill | Avatar + name | Sign out 
+
+Page title row: H1 'My Schedule' (left) + 'Edit Schedule' button (right) 
+
+Two-column main area: Weekly schedule grid (left, ~70%) + Upcoming sidebar (right, 280px) 
+
+ 
+
+Authenticated Header 
+
+Left: Logo 
+
+Center: Semester pill — 'Spring 2026' — #F3F4F6 background, Inter 500 13px 
+
+Right: User avatar (circular 28px) + name + divider + 'Sign out' (Inter 400 14px, #6B7280) 
+
+ 
+
+Page Title Row 
+
+H1 'My Schedule' — Inter 600, 28px, #111111 
+
+'Edit Schedule' button: outlined, border 1px #D1D5DB, Inter 500 14px #374151, border-radius 8px 
+
+Hover state: border #111111, text #111111, shadow 0 2px 8px rgba(0,0,0,0.06) 
+
+ 
+
+8.2.1 Weekly Schedule Grid 
+
+5 columns: Monday through Friday 
+
+Time axis on the left: 07:00 to 20:00, in 30-minute slots 
+
+Each lecture rendered as a positioned card block spanning start_time to end_time 
+
+ 
+
+Grid Container 
+
+Background: white, Border: 1px solid #E5E7EB, Border-radius: 12px 
+
+Box-shadow: 0 1px 3px rgba(0,0,0,0.06), 0 4px 20px rgba(0,0,0,0.04) 
+
+Column headers: #FAFAFA background, Inter 500 13px #6B7280 uppercase, height 44px 
+
+Time axis: width 56px, #FAFAFA, Inter 400 12px #9CA3AF 
+
+Full-hour grid lines: 1px solid #F3F4F6, half-hour: 1px solid #F9FAFB 
+
+ 
+
+Lecture Block Card 
+
+Background: white, Border: 1px solid #E5E7EB 
+
+Border-left: 3px solid #111111 (accent stripe; use color_tag from DB if present) 
+
+Border-radius: 6px, Box-shadow: 0 1px 4px rgba(0,0,0,0.07), Padding: 8px 10px 
+
+Course code: Inter 600 11px #111111 uppercase 
+
+Course name: Inter 500 13px #111111 (truncated with ellipsis) 
+
+Room + time: Inter 400 11px #9CA3AF 
+
+Hover: box-shadow 0 4px 16px rgba(0,0,0,0.10), border-left #000000 
+
+ 
+
+Lecture Detail Popover (on click) 
+
+Background: white, Border: 1px solid #E5E7EB, Border-radius: 10px 
+
+Box-shadow: 0 8px 32px rgba(0,0,0,0.12), Width: 240px 
+
+Animation: fade in + scale 0.97→1.0 in 120ms ease-out 
+
+Content: course name, professor, room, time range, divider, 'View in Google Calendar ↗' 
+
+ 
+
+Empty State 
+
+Calendar SVG outline icon 40px #D1D5DB, centered 
+
+'No lectures added yet.' — Inter 500 15px #374151 
+
+'Add your courses to get started.' — Inter 400 13px #9CA3AF 
+
+'Add courses' — black filled pill button 
+
+ 
+
+8.2.2 Upcoming Classes Sidebar 
+
+Fixed width: 280px, Background: #FAFAFA 
+
+Border: 1px solid #E5E7EB, Border-radius: 12px, Padding: 20px 
+
+Header row: 'Today' (Inter 600 15px #111111) + current date (Inter 400 13px #9CA3AF) 
+
+ 
+
+'Next Up' Card (highlighted) 
+
+Background: white, Border: 1px solid #E5E7EB, Border-radius: 10px 
+
+Box-shadow: 0 2px 12px rgba(0,0,0,0.07), Padding: 14px 
+
+Course name: Inter 600 14px #111111 
+
+Professor: Inter 400 12px #6B7280 
+
+Clock icon + time: Inter 500 13px #111111 
+
+Map pin + room: Inter 400 12px #9CA3AF 
+
+Countdown pill: 'In 45 min' — #F3F4F6 background, Inter 500 12px #374151, updates in real-time 
+
+ 
+
+'Later Today' Cards 
+
+Background: white, Border: 1px solid #F3F4F6, Border-radius: 8px, Padding: 10px 12px 
+
+Time block: Inter 600 13px #111111 | Course name: Inter 500 13px #374151 
+
+No more classes state: 'No more classes today.' — Inter 400 13px #9CA3AF 
+
+Then show: 'Next: Monday, 09:00 – Algorithms' 
+
+ 
+
+8.3 Course Selection (/select-courses) 
+
+Triggered on first login or via 'Edit Schedule'. Displays a searchable, filterable list of all available lectures. 
+
+ 
+
+Course List Item 
+
+Row height: 56px, border-bottom: 1px solid #F9FAFB 
+
+Hover: background #FAFAFA 
+
+Custom checkbox (16x16px): unchecked = border 1.5px #D1D5DB; checked = background #111111 + white checkmark 
+
+Course code pill: #F3F4F6 background, Inter 500 12px #374151, border-radius 999px 
+
+Course name: Inter 500 14px #111111 
+
+Day + time: Inter 400 13px #6B7280 — 'Monday, 09:00–10:30' 
+
+Professor: Inter 400 13px #9CA3AF | Room: Inter 400 12px #9CA3AF 
+
+ 
+
+Search Bar 
+
+Height: 40px, border: 1px solid #E5E7EB, border-radius: 8px 
+
+Left icon: search SVG 14px #9CA3AF 
+
+Font: Inter 400 14px, placeholder: #D1D5DB 
+
+Focus: border-color #111111, box-shadow 0 0 0 3px rgba(0,0,0,0.06) 
+
+ 
+
+Filter Pills 
+
+Background: white, border: 1px solid #E5E7EB, border-radius: 999px 
+
+Text: Inter 500 13px #374151, chevron icon 12px #9CA3AF 
+
+Active/open: border-color #111111 
+
+ 
+
+Sticky Bottom Bar 
+
+Position: fixed bottom-0, background: white/95%, backdrop-blur: 8px 
+
+Border-top: 1px solid #E5E7EB, Height: 68px 
+
+Left: 'N courses selected' — Inter 500 14px #374151 
+
+Right: 'Review & Confirm' — black filled button, Inter 500 14px, disabled when 0 courses 
+
+ 
+
+8.4 Review & Confirm Modal (Step 2) 
+
+Overlay: rgba(0,0,0,0.32), backdrop-filter: blur(2px) 
+
+Modal: white, border-radius 16px, box-shadow 0 24px 80px rgba(0,0,0,0.18), width 560px 
+
+Header: 'Review your schedule' Inter 600 22px + subtext Inter 400 14px #6B7280 
+
+Course summary list: compact rows of course name + day + time + professor 
+
+ 
+
+Conflict Warning 
+
+Background: #FFF9F0, border: 1px solid #FDE68A, border-radius: 8px 
+
+Icon: warning triangle SVG #F59E0B 
+
+Text: 'Conflict detected: CS301 overlaps with MATH205 on Tuesday 10:00–11:00' 
+
+ 
+
+Action Row 
+
+Left: '← Back' — text button, Inter 400 14px #6B7280 
+
+Right: 'Confirm & Sync to Google Calendar' — filled black button 
+
+Loading state: spinner icon + 'Syncing…' text, button disabled 
+
+ 
+
+9. Google Calendar Integration 
+
+How it works 
+
+When the user confirms their schedule, for each selected lecture, call POST /v3/calendars/primary/events with a recurring weekly event: 
+
+ 
+
+summary: "CS301 — Algorithms & Data Structures" 
+
+location: "Building A, Room 204" 
+
+start.dateTime: "2026-02-03T09:00:00" 
+
+end.dateTime: "2026-02-03T10:30:00" 
+
+recurrence: ["RRULE:FREQ=WEEKLY;BYDAY=MO;UNTIL=20260630T235959Z"] 
+
+reminders.overrides: [{ method: "popup", minutes: 15 }] 
+
+ 
+
+Store the returned event.id in user_schedules.google_event_id. 
+
+ 
+
+Edit / Remove 
+
+Remove a lecture: DELETE /v3/calendars/primary/events/{eventId}, delete user_schedules row 
+
+Change a lecture: PATCH the existing event, update user_schedules 
+
+ 
+
+Token Refresh 
+
+Before any Calendar API call, check token_expires_at in user_profiles 
+
+If expired, call Google's token refresh endpoint using refresh_token 
+
+Update stored access_token and token_expires_at in Supabase 
+
+ 
+
+10. Edit Schedule Flow 
+
+Accessed via 'Edit Schedule' button. Reuses the Course Selection UI (/select-courses) with all currently enrolled courses pre-checked. 
+
+ 
+
+Diff Logic 
+
+previous = current user_schedules lecture_ids 
+
+next = newly selected lecture_ids 
+
+to_add = next − previous → create Google Calendar event, insert user_schedules row 
+
+to_remove = previous − next → delete Google Calendar event, delete user_schedules row 
+
+Unchanged courses → no API call made 
+
+ 
+
+11. UX Microcopy Standards 
+
+All copy: sentence case, no exclamation marks, no emoji in the app UI. 
+
+ 
+
+Element 
+
+Copy 
+
+Sign in button 
+
+Sign in with Google 
+
+CTA hero 
+
+Sign in with Google 
+
+Edit button 
+
+Edit Schedule 
+
+Confirm button 
+
+Confirm & Sync to Google Calendar 
+
+Loading sync 
+
+Syncing your schedule… 
+
+Success toast 
+
+Schedule synced to Google Calendar 
+
+Error toast 
+
+Something went wrong. Please try again. 
+
+No lectures today 
+
+No more classes today. 
+
+Empty schedule 
+
+No lectures added yet. 
+
+Empty schedule CTA 
+
+Add courses 
+
+Conflict warning 
+
+Schedule conflict detected on [day] at [time] 
+
+Sign out 
+
+Sign out 
+
+ 
+
+12. Toast / Notification System 
+
+Position: bottom-right, 16px from edge, max 3 stacked 
+
+Background: white, Border: 1px solid #E5E7EB 
+
+Border-left: 3px solid #111111 (success) / #EF4444 (error) / #F59E0B (warning) 
+
+Border-radius: 10px, Box-shadow: 0 8px 32px rgba(0,0,0,0.12), Padding: 14px 16px 
+
+Animation: slide-in from right in 200ms ease-out 
+
+Auto-dismiss: 4000ms, then fade + slide out 
+
+ 
+
+13. Loading States 
+
+Page Load (Authenticated) 
+
+Skeleton screens — not spinners 
+
+Weekly grid: grey skeleton blocks at random positions with animated shimmer 
+
+Shimmer: #F3F4F6 → #E5E7EB → #F3F4F6, cycling at 1.5s 
+
+ 
+
+Course List Load 
+
+7 skeleton rows, each 56px height 
+
+Left: skeleton checkbox, Middle: two skeleton pills, Right: skeleton text lines 
+
+ 
+
+Sync in Progress 
+
+'Edit Schedule' button replaced with spinner + 'Syncing…' 
+
+Button disabled, opacity 0.7 
+
+ 
+
+14. Responsive Design 
+
+ 
+
+Breakpoint 
+
+Value 
+
+Behaviour 
+
+Desktop 
+
+≥1024px 
+
+Side-by-side: schedule grid + sidebar 
+
+Tablet 
+
+768–1023px 
+
+Schedule grid full width; sidebar collapses below 
+
+Mobile 
+
+<768px 
+
+Scrollable daily view; sidebar as horizontal strip 
+
+ 
+
+Mobile Weekly View 
+
+Switch from 5-column grid to single-day view with horizontal swipe 
+
+Day navigation: pill tabs at top — Mon | Tue | Wed | Thu | Fri 
+
+Sidebar becomes horizontal scrollable row of cards below the grid 
+
+ 
+
+Header (Mobile) 
+
+Logo centered 
+
+Menu icon right (hamburger) → slide-in drawer with sign out + semester info 
+
+ 
+
+15. Accessibility Requirements 
+
+All interactive elements: visible focus ring (2px offset, outline: 2px solid #111111) 
+
+Color contrast: all text meets WCAG AA minimum (4.5:1 for body text) 
+
+Keyboard navigation: full tab order through schedule grid, sidebar, modals 
+
+aria-label on all icon-only buttons 
+
+Modal: focus trap on open, return focus on close 
+
+Screen reader: schedule grid uses role='grid', role='gridcell', aria-rowspan for multi-slot events 
+
+Toast: role='status' for success, role='alert' for errors 
+
+ 
+
+16. Performance Targets 
+
+ 
+
+Metric 
+
+Target 
+
+LCP (Largest Contentful Paint) 
+
+< 1.5s 
+
+FID / INP 
+
+< 100ms 
+
+CLS 
+
+< 0.05 
+
+Time to Interactive 
+
+< 2.0s 
+
+Bundle size (initial JS) 
+
+< 150KB gzipped 
+
+ 
+
+Optimisations 
+
+Inter font: subset to Latin, font-display: swap 
+
+Supabase queries: use indexed columns, minimal select fields 
+
+Google Calendar API: batch event creation where possible 
+
+React: lazy-load the edit schedule modal 
+
+ 
+
+17. Security Considerations 
+
+All Supabase queries use Row Level Security (RLS) — users can only query their own user_schedules rows 
+
+Google OAuth tokens stored in Supabase, never in localStorage 
+
+google_access_token and google_refresh_token columns: RLS policy allows only auth.uid() = id 
+
+Calendar API calls made server-side via Supabase Edge Functions — tokens never exposed to browser 
+
+CSRF: Supabase Auth handles state parameter in OAuth flow 
+
+Rate limiting: Edge Functions implement per-user rate limiting on sync operations 
+
+ 
+
+18. Supabase Edge Functions 
+
+sync-schedule 
+
+Trigger: Called when user confirms course selection or edits schedule. 
+
+Input: { to_add: lecture_id[], to_remove: { lecture_id, google_event_id }[] } 
+
+Fetch user's Google tokens from user_profiles 
+
+Refresh token if needed 
+
+Create/delete Calendar events via Google API 
+
+Update user_schedules in Supabase 
+
+Return { success: boolean, errors: [] } 
+
+ 
+
+get-upcoming 
+
+Trigger: Called on dashboard load and every 5 minutes. 
+
+Input: { user_id } 
+
+Fetch user's user_schedules joined with lectures 
+
+Filter to today's day_of_week 
+
+Sort by start_time ascending 
+
+Return lectures happening after now() 
+
+ 
+
+19. Component Library Summary 
+
+ 
+
+Component 
+
+Purpose 
+
+<Header /> 
+
+Sticky; authenticated / unauthenticated variants 
+
+<WeeklyGrid /> 
+
+5-column schedule with time axis 
+
+<LectureBlock /> 
+
+Positioned card inside WeeklyGrid 
+
+<LecturePopover /> 
+
+Hover/click detail card 
+
+<UpcomingSidebar /> 
+
+Today's class list 
+
+<NextLectureCard /> 
+
+Highlighted 'next up' card 
+
+<CourseListItem /> 
+
+Checkbox row in course selection 
+
+<SearchBar /> 
+
+Controlled input with debounce 
+
+<FilterPill /> 
+
+Dropdown trigger pill 
+
+<ConfirmModal /> 
+
+Review + sync modal 
+
+<ConflictWarning /> 
+
+Yellow warning card in modal 
+
+<Toast /> 
+
+Notification card 
+
+<Skeleton /> 
+
+Shimmer loading placeholder 
+
+<EmptyState /> 
+
+Illustration + CTA for empty schedule 
+
+<Avatar /> 
+
+User profile picture circle 
+
+<SemesterPill /> 
+
+'Spring 2026' header tag 
+
+ 
+
+20. Design Anti-Patterns to Avoid 
+
+The following must NEVER appear in the UI: 
+
+ 
+
+Blue accent colours (no Bootstrap blue, no link blue, no primary-500) 
+
+Purple or gradient anything 
+
+Generic sans-serif fallback styling 
+
+Heavy drop shadows (keep all shadows extremely soft) 
+
+Animated backgrounds, particles, or gradient mesh on marketing page 
+
+Emoji in production UI (landing page or app) 
+
+Success states with green fills — use subtle border changes instead 
+
+Glassmorphism panels, neon glow, dark mode by default 
+
+ 
+
+The visual benchmark is: would this feel at home in the Attio, Linear, or Firecrawl product? If yes, proceed. 
+
+ 
+
+21. Suggested File Structure 
+
+ 
+
+/src 
+
+  /components 
+
+    /layout        Header.tsx, SemesterPill.tsx 
+
+    /schedule      WeeklyGrid.tsx, LectureBlock.tsx, LecturePopover.tsx, EmptySchedule.tsx 
+
+    /sidebar       UpcomingSidebar.tsx, NextLectureCard.tsx, UpcomingLectureCard.tsx 
+
+    /courses       CourseListItem.tsx, SearchBar.tsx, FilterPill.tsx, ConfirmModal.tsx 
+
+    /ui            Toast.tsx, Skeleton.tsx, Avatar.tsx, Button.tsx, Checkbox.tsx 
+
+  /pages 
+
+    LandingPage.tsx, Dashboard.tsx, SelectCourses.tsx, AuthCallback.tsx 
+
+  /lib 
+
+    supabase.ts, googleCalendar.ts, utils.ts 
+
+  /hooks 
+
+    useSchedule.ts, useUpcoming.ts, useAuth.ts 
+
+  /store 
+
+    scheduleStore.ts, authStore.ts 
+
+  /styles 
+
+    globals.css, typography.css 
+
+ 
+
+22. Open Questions for Engineering 
+
+Semester date range: Add a semesters table or hardcode per deployment? 
+
+Time zone: Browser locale or university-specific? Recommend storing UTC and converting client-side. 
+
+Multi-section conflicts: Prevent selection of two sections of same course, or warn only? 
+
+Lecturer changes: Should lecture row updates in Supabase auto-patch Google Calendar events? (Recommend: yes, via DB trigger) 
+
+Holiday handling: If recurring events skip holidays, a holidays table with EXDATE RRULE rules is needed. 
+
+ 
+
+End of PRD — UniSchedule v1.0 
