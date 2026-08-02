@@ -5,7 +5,7 @@ import { FileDrop } from '../../components/ui/FileDrop'
 import { Input } from '../../components/ui/Input'
 import { Select } from '../../components/ui/Select'
 import { useToast } from '../../components/ui/Toast'
-import { validateAcademicEventInput, validateLectureInput } from '../../lib/adminValidation'
+import { validateAcademicEventInput } from '../../lib/adminValidation'
 import { copy } from '../../lib/copy'
 import { getProvider } from '../../lib/data/provider'
 import {
@@ -14,11 +14,11 @@ import {
   type AcademicEventInput,
   type AcademicEventKind,
   type DayOfWeek,
-  type LectureInput,
+  type Lecture,
   type ScheduleEntry,
   type SemesterInput,
 } from '../../lib/data/types'
-import { deriveCourseCodes } from '../../lib/import/courseCode'
+import { matchLecture, type LectureMatch } from '../../lib/import/lectureMatch'
 import { parseAcademicCalendar } from '../../lib/import/calendarParser'
 import { extractPages, pageText, type PdfPage } from '../../lib/import/pdfText'
 import { parseTimetable, type ParsedSheet } from '../../lib/import/timetableParser'
@@ -26,11 +26,28 @@ import { foldGreek } from '../../lib/import/greek'
 
 type Kind = 'timetable' | 'calendar'
 
-interface LectureRow extends LectureInput {
+/**
+ * A parsed timetable row, reduced to what matching and review need.
+ *
+ * There is deliberately no course_code / subject / department / study_year
+ * here: a timetable import never creates or edits a catalogue entry, so
+ * fields the commit never writes have no business being editable.
+ */
+interface LectureRow {
   key: string
+  course_name: string
+  professor: string
+  room: string | null
+  day_of_week: DayOfWeek
+  start_time: string
+  end_time: string
   include: boolean
   warnings: string[]
   page: number
+}
+
+interface ReviewRow extends LectureRow {
+  match: LectureMatch
 }
 
 interface EventRow extends AcademicEventInput {
@@ -44,15 +61,16 @@ interface EventRow extends AcademicEventInput {
  * university publishes.
  *
  * The PDF is parsed **in the browser** (src/lib/import), reduced to plain
- * LectureInput / AcademicEventInput rows, reviewed here, and only then sent
- * through the ordinary bulk-import actions. No binary crosses the wire, there
- * is no storage bucket, and the whole flow works against the mock provider with
- * no network at all.
+ * rows, reviewed here, and only then sent through the ordinary admin
+ * actions. No binary crosses the wire, there is no storage bucket, and the
+ * whole flow works against the mock provider with no network at all.
  *
- * The review step is not a formality. The source documents are hand-laid tables
- * with merged cells, no course codes, and the occasional professor written
- * across two lines, so the parser gets most rows right and flags the rest. This
- * screen is what turns "mostly right" into correct data.
+ * The timetable PDF never creates a lecture — lectures are added by hand in
+ * the Lectures tab. Each row here is matched by name, day and time against
+ * the existing catalogue (src/lib/import/lectureMatch.ts); a match gets its
+ * `semester` field set to the term being imported, and nothing else about it
+ * changes. A row with no match (or more than one) is flagged so the admin
+ * notices — the fix lives in the Lectures tab, not on this screen.
  */
 export function AdminImport() {
   const { toast } = useToast()
@@ -62,6 +80,7 @@ export function AdminImport() {
   const [pages, setPages] = useState<PdfPage[] | null>(null)
   const [sheets, setSheets] = useState<ParsedSheet[]>([])
   const [lectures, setLectures] = useState<LectureRow[]>([])
+  const [existingLectures, setExistingLectures] = useState<Lecture[]>([])
   const [events, setEvents] = useState<EventRow[]>([])
   const [proposed, setProposed] = useState<SemesterInput | null>(null)
   const [semester, setSemester] = useState('')
@@ -85,6 +104,21 @@ export function AdminImport() {
       alive = false
     }
   }, [])
+
+  // The catalogue to match parsed rows against — fetched whenever a timetable
+  // is being reviewed, so a re-import after editing the catalogue sees it.
+  useEffect(() => {
+    if (kind !== 'timetable') return
+    let alive = true
+    void getProvider()
+      .admin.listLectures()
+      .then((ls) => {
+        if (alive) setExistingLectures(ls)
+      })
+    return () => {
+      alive = false
+    }
+  }, [kind])
 
   /**
    * Which document this is, from its own wording.
@@ -133,12 +167,16 @@ export function AdminImport() {
       // first; otherwise the admin types it before saving.
       const name = proposed?.name ?? semester
       const result = parseTimetable(source, { semester: name })
-      const codes = deriveCourseCodes(result.lectures)
       setSheets(result.sheets)
       setLectures(
-        result.lectures.map((l, i) => ({
-          ...l,
-          course_code: codes[i]!,
+        result.lectures.map((l) => ({
+          key: l.key,
+          course_name: l.course_name,
+          professor: l.professor,
+          room: l.room,
+          day_of_week: l.day_of_week,
+          start_time: l.start_time,
+          end_time: l.end_time,
           include: true,
           warnings: l.warnings,
           page: l.source.page,
@@ -172,25 +210,34 @@ export function AdminImport() {
   const setEvent = (key: string, patch: Partial<EventRow>) =>
     setEvents((rows) => rows.map((r) => (r.key === key ? { ...r, ...patch } : r)))
 
-  // Applying the semester name here rather than at parse time means changing it
-  // does not throw away the admin's edits.
-  const lectureRows = useMemo(
-    () => lectures.map((l) => ({ ...l, semester: semester || l.semester })),
-    [lectures, semester],
+  // Recomputed on every keystroke: editing a row's name/day/time is how the
+  // admin steers a garbled parse onto the right catalogue lecture. None of
+  // these edits are ever written back — they only change what gets matched.
+  const lectureRows: ReviewRow[] = useMemo(
+    () =>
+      lectures.map((l) => ({
+        ...l,
+        match: matchLecture(
+          { course_name: l.course_name, day_of_week: l.day_of_week, start_time: l.start_time },
+          existingLectures,
+        ),
+      })),
+    [lectures, existingLectures],
   )
 
-  const chosenLectures = lectureRows.filter((l) => l.include)
+  const chosenLectures = lectureRows.filter(
+    (r): r is ReviewRow & { match: Extract<LectureMatch, { status: 'matched' }> } =>
+      r.include && r.match.status === 'matched',
+  )
   const chosenEvents = events.filter((e) => e.include)
 
   /** Preview entries for the read-only grid beside the table. */
-  const previewEntries: ScheduleEntry[] = chosenLectures
-    .filter((l) => validateLectureInput(l) === null)
-    .map((l, i) => ({
-      id: `preview-${i}`,
-      lecture_id: `preview-${i}`,
-      google_event_id: null,
-      lecture: { ...l, id: `preview-${i}` },
-    }))
+  const previewEntries: ScheduleEntry[] = chosenLectures.map((r, i) => ({
+    id: `preview-${i}`,
+    lecture_id: `preview-${i}`,
+    google_event_id: null,
+    lecture: { ...r.match.lecture, semester: semester || r.match.lecture.semester, id: `preview-${i}` },
+  }))
 
   async function commit() {
     const admin = getProvider().admin
@@ -216,16 +263,18 @@ export function AdminImport() {
           toast(copy.adminImportNothing, 'warning')
           return
         }
-        if (proposed) await ensureSemester(proposed)
-        const result = await admin.bulkImportLectures(
-          chosenLectures.map(
-            ({ key: _key, include: _include, warnings: _warnings, page: _page, ...row }) => row,
-          ),
-        )
-        toast(
-          copy.adminImportDone(result.created, result.errors.length),
-          result.errors.length ? 'warning' : 'success',
-        )
+        let updated = 0
+        let failed = 0
+        for (const row of chosenLectures) {
+          try {
+            const { id: _id, ...input } = row.match.lecture
+            await admin.updateLecture(row.match.lecture.id, { ...input, semester })
+            updated++
+          } catch {
+            failed++
+          }
+        }
+        toast(copy.adminImportSyncDone(updated, failed), failed ? 'warning' : 'success')
       }
       reset()
       setPages(null)
@@ -302,7 +351,7 @@ export function AdminImport() {
 // --- Timetable review ------------------------------------------------------
 
 interface TimetableReviewProps {
-  rows: LectureRow[]
+  rows: ReviewRow[]
   sheets: ParsedSheet[]
   semester: string
   onSemester: (value: string) => void
@@ -322,8 +371,8 @@ function TimetableReview({
   saving,
   onCommit,
 }: TimetableReviewProps) {
-  const flagged = rows.filter((r) => r.warnings.length > 0 || validateLectureInput(r) !== null)
-  const included = rows.filter((r) => r.include).length
+  const flagged = rows.filter((r) => r.warnings.length > 0 || r.match.status !== 'matched')
+  const included = rows.filter((r) => r.include && r.match.status === 'matched').length
 
   return (
     <div className="mt-6">
@@ -335,7 +384,7 @@ function TimetableReview({
           <p className="mt-1 max-w-[70ch] text-sm text-muted">{copy.adminImportReviewHint}</p>
         </div>
         <Button loading={saving} onClick={onCommit} disabled={included === 0}>
-          {copy.adminImportCommit}
+          {copy.adminImportApplySemester}
         </Button>
       </div>
 
@@ -395,10 +444,10 @@ function LectureRowEditor({
   row,
   onChange,
 }: {
-  row: LectureRow
+  row: ReviewRow
   onChange: (key: string, patch: Partial<LectureRow>) => void
 }) {
-  const error = validateLectureInput(row)
+  const matched = row.match.status === 'matched'
 
   return (
     <div className="rounded-card border border-line p-3">
@@ -406,18 +455,14 @@ function LectureRowEditor({
         <label className="mt-1 flex items-center gap-2 text-sm text-muted">
           <input
             type="checkbox"
-            checked={row.include}
+            checked={row.include && matched}
+            disabled={!matched}
             onChange={(e) => onChange(row.key, { include: e.target.checked })}
             aria-label={`${copy.adminImportInclude} ${row.course_name}`}
           />
         </label>
 
         <div className="grid min-w-0 flex-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
-          <Input
-            label="Course code"
-            value={row.course_code}
-            onChange={(e) => onChange(row.key, { course_code: e.target.value })}
-          />
           <Input
             label="Course name"
             value={row.course_name}
@@ -453,30 +498,6 @@ function LectureRowEditor({
             value={row.room ?? ''}
             onChange={(e) => onChange(row.key, { room: e.target.value || null })}
           />
-          <Input
-            label="Subject"
-            value={row.subject ?? ''}
-            onChange={(e) => onChange(row.key, { subject: e.target.value || null })}
-          />
-          <Select
-            label="Year of study"
-            value={row.study_year === null ? '' : String(row.study_year)}
-            placeholder="None"
-            options={[1, 2, 3, 4].map((y) => ({ value: String(y), label: String(y) }))}
-            onChange={(e) =>
-              onChange(row.key, {
-                study_year: e.target.value === '' ? null : Number(e.target.value),
-              })
-            }
-          />
-          <label className="flex items-center gap-2 self-end text-sm text-ink">
-            <input
-              type="checkbox"
-              checked={row.is_mandatory}
-              onChange={(e) => onChange(row.key, { is_mandatory: e.target.checked })}
-            />
-            Required
-          </label>
         </div>
       </div>
 
@@ -485,7 +506,19 @@ function LectureRowEditor({
           {w}
         </p>
       ))}
-      {error && <p className="mt-2 text-sm text-danger">{error}</p>}
+      {row.match.status === 'matched' && (
+        <p className="mt-2 text-sm text-muted">
+          Matches {row.match.lecture.course_code} · {row.match.lecture.professor}
+        </p>
+      )}
+      {row.match.status === 'unmatched' && (
+        <p className="mt-2 text-sm text-danger">{copy.adminImportNoMatch}</p>
+      )}
+      {row.match.status === 'ambiguous' && (
+        <p className="mt-2 text-sm text-danger">
+          {copy.adminImportAmbiguousMatch(row.match.candidates.length)}
+        </p>
+      )}
     </div>
   )
 }

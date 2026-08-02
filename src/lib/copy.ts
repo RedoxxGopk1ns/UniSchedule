@@ -140,14 +140,12 @@ export const copy = {
   statSemesters: 'Semesters',
   statCalendarAdoption: 'Calendar sync adoption',
   statTopCourses: 'Most enrolled',
-  statSignups: 'Recent sign-ups',
   statNoData: 'No data yet.',
 
   // Admin — lectures
   adminAddLecture: 'Add lecture',
   adminEditLecture: 'Edit lecture',
   adminNewLecture: 'New lecture',
-  adminDuplicate: 'Duplicate',
   adminEdit: 'Edit',
   adminDelete: 'Delete',
   adminImport: 'Import CSV',
@@ -205,10 +203,11 @@ export const copy = {
   adminImportReviewLectures: 'Review lectures',
   adminImportReviewEvents: 'Review calendar entries',
   adminImportReviewHint:
-    'Course codes are generated because the timetable does not carry them. Edit anything before saving.',
+    'Every row is matched against an existing lecture by name, day and time; matched lectures are marked as offered this semester. Nothing here creates a new lecture — add those in the Lectures tab first.',
   adminImportInclude: 'Include',
   adminImportWarnings: 'Needs a look',
   adminImportCommit: 'Save to catalogue',
+  adminImportApplySemester: 'Add to semester',
   adminImportPreview: 'Preview',
   adminImportSheet: (page: number, semester: number | null, year: number | null) =>
     semester === null
@@ -218,8 +217,14 @@ export const copy = {
     `The calendar describes ${name}, ${start} to ${end}. It will be created if it does not exist.`,
   adminImportDone: (created: number, failed: number) =>
     failed > 0 ? `Imported ${created}, ${failed} skipped` : `Imported ${created}`,
+  adminImportSyncDone: (updated: number, failed: number) =>
+    failed > 0 ? `Added to semester: ${updated}, ${failed} failed` : `Added to semester: ${updated}`,
   adminImportNothing: 'Nothing is selected to import.',
   adminImportRowInvalid: 'This row cannot be saved yet.',
+  adminImportNoMatch:
+    'No existing lecture matches this name, day and time — add it in the Lectures tab, then re-import.',
+  adminImportAmbiguousMatch: (count: number) =>
+    `${count} existing lectures match this name, day and time — rename one so the import can tell them apart.`,
 
   // Admin — academic calendar
   adminTabCalendar: 'Calendar',

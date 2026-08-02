@@ -1099,17 +1099,6 @@ async function stats(supabase: Supabase) {
     }))
   }
 
-  // Sign-ups by day (last 30 days).
-  const signupsMap = new Map<string, number>()
-  for (const u of users) {
-    const day = new Date(u.created_at).toISOString().slice(0, 10)
-    signupsMap.set(day, (signupsMap.get(day) ?? 0) + 1)
-  }
-  const signups = [...signupsMap.entries()]
-    .sort((a, b) => a[0].localeCompare(b[0]))
-    .slice(-30)
-    .map(([date, count]) => ({ date, count }))
-
   const connected = users.filter((u) => u.calendar.connected).length
   const withRefresh = users.filter((u) => u.calendar.has_refresh_token).length
 
@@ -1127,7 +1116,6 @@ async function stats(supabase: Supabase) {
       adoption_rate: users.length ? connected / users.length : 0,
     },
     top_courses: topCourses,
-    signups,
   }
 }
 

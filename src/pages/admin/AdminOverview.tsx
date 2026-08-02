@@ -13,7 +13,7 @@ function StatCard({ label, value }: { label: string; value: string | number }) {
   )
 }
 
-/** Read-only analytics overview: totals, calendar adoption, top courses, sign-ups. */
+/** Read-only analytics overview: totals, calendar adoption, top courses. */
 export function AdminOverview() {
   const [stats, setStats] = useState<AdminStats | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -87,27 +87,6 @@ export function AdminOverview() {
               </li>
             ))}
           </ul>
-        )}
-      </section>
-
-      <section>
-        <h2 className="text-[15px] font-semibold text-ink">{copy.statSignups}</h2>
-        {stats.signups.length === 0 ? (
-          <p className="mt-2 text-sm text-muted">{copy.statNoData}</p>
-        ) : (
-          <div className="mt-3 flex items-end gap-1" style={{ height: 96 }}>
-            {stats.signups.map((s) => {
-              const max = Math.max(1, ...stats.signups.map((x) => x.count))
-              return (
-                <div
-                  key={s.date}
-                  title={`${s.date}: ${s.count}`}
-                  className="flex-1 rounded-t bg-ink/80"
-                  style={{ height: `${(s.count / max) * 100}%`, minHeight: 2 }}
-                />
-              )
-            })}
-          </div>
         )}
       </section>
     </div>

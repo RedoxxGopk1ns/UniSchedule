@@ -596,10 +596,6 @@ export const mockProvider: DataProvider = {
           course_name: l.course_name,
           count: 12 - i * 2,
         })),
-        signups: [
-          { date: '2026-02-01', count: 1 },
-          { date: '2026-02-03', count: 1 },
-        ],
       }
     },
   },

@@ -232,8 +232,6 @@ export interface AdminStats {
   }
   /** Most-enrolled lectures, highest first. */
   top_courses: { lecture_id: string; course_code: string; course_name: string; count: number }[]
-  /** Sign-ups grouped by day, oldest first. */
-  signups: { date: string; count: number }[]
 }
 
 /** Outcome of a bulk lecture import. */

@@ -18,6 +18,15 @@ import { parseLectureCsv } from './lectureCsv'
 /** 'HH:MM:SS' | 'HH:MM' -> 'HH:MM' for <input type="time">. */
 const hhmm = (t: string) => t.slice(0, 5)
 
+const ROOMS = [
+  'Αμφιθέατρο 1ου ορόφου',
+  'Εργαστήριο 2ου ορόφου',
+  'Αμφιθέατρο 2ου ορόφου',
+  'Εργαστήριο 3ου ορόφου',
+  'Αμφιθέατρο 3ου ορόφου',
+  'Αμφιθέατρο 4ου ορόφου',
+]
+
 function blankInput(semester: string): LectureInput {
   return {
     course_code: '',
@@ -128,13 +137,6 @@ export function AdminLectures() {
             onClick={() => setEditing({ id: l.id, input: toInput(l) })}
           >
             {copy.adminEdit}
-          </Button>
-          <Button
-            variant="ghost"
-            className="px-2 py-1 text-xs"
-            onClick={() => setEditing({ id: null, input: toInput(l) })}
-          >
-            {copy.adminDuplicate}
           </Button>
           <Button
             variant="ghost"
@@ -313,10 +315,11 @@ function LectureFormModal({
             value={form.professor}
             onChange={(e) => set('professor', e.target.value)}
           />
-          <Input
+          <Select
             label="Room"
             value={form.room ?? ''}
             onChange={(e) => set('room', e.target.value || null)}
+            options={[{ value: '', label: '—' }, ...ROOMS.map((r) => ({ value: r, label: r }))]}
           />
           <Select
             label="Day"
@@ -342,10 +345,14 @@ function LectureFormModal({
             value={form.end_time}
             onChange={(e) => set('end_time', e.target.value)}
           />
-          <Input
+          <Select
             label="Department"
             value={form.department ?? ''}
             onChange={(e) => set('department', e.target.value || null)}
+            options={[
+              { value: '', label: '—' },
+              ...(initial.department ? [{ value: initial.department, label: initial.department }] : []),
+            ]}
           />
           <Input
             label="Subject"

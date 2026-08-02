@@ -6,6 +6,70 @@ import App from './App'
 import { resetMockCatalogue, setMockAdmin } from './lib/data/mockProvider'
 import { useAuthStore } from './store/authStore'
 import { useScheduleStore } from './store/scheduleStore'
+import type { ParsedLecture, ParsedSheet } from './lib/import/timetableParser'
+
+/**
+ * A parsed timetable row matching the seeded 'TPT6-PROGRAMMATISMOS-SYSTIMATON'
+ * lecture (name + day + start time), and one that matches nothing. room/
+ * professor/end_time deliberately differ from the real seeded values, so the
+ * "does not overwrite the schedule" assertion below actually exercises
+ * something — if the import ever started writing those fields back, this
+ * would catch it.
+ */
+const { fakeSheets, fakeLectures } = vi.hoisted(() => {
+  const matched: ParsedLecture = {
+    key: 'k1',
+    course_code: '',
+    course_name: 'Προγραμματισμός Συστημάτων',
+    professor: 'Διαφορετικός Καθηγητής',
+    room: 'Διαφορετική Αίθουσα',
+    day_of_week: 'Monday',
+    start_time: '09:00',
+    end_time: '11:00',
+    semester: 'Spring 2026',
+    department: 'Πληροφορικής και Τηλεματικής',
+    color_tag: null,
+    subject: null,
+    is_mandatory: false,
+    study_year: null,
+    warnings: [],
+    source: { page: 1, semesterNumber: 6 },
+  }
+  const unmatched: ParsedLecture = {
+    key: 'k2',
+    course_code: '',
+    course_name: 'Ένα Μάθημα Που Δεν Υπάρχει',
+    professor: 'Άγνωστος',
+    room: null,
+    day_of_week: 'Friday',
+    start_time: '18:00',
+    end_time: '19:00',
+    semester: 'Spring 2026',
+    department: 'Πληροφορικής και Τηλεματικής',
+    color_tag: null,
+    subject: null,
+    is_mandatory: false,
+    study_year: null,
+    warnings: [],
+    source: { page: 1, semesterNumber: null },
+  }
+  const fakeLectures: ParsedLecture[] = [matched, unmatched]
+  const fakeSheets: ParsedSheet[] = [
+    { page: 1, semesterNumber: 6, studyYear: 3, lectures: fakeLectures, warnings: [] },
+  ]
+  return { fakeSheets, fakeLectures }
+})
+
+// The real PDF pipeline (pdfjs, worker) has no place in jsdom; the timetable
+// review only needs a parsed result, so both are stubbed. sniff() only reads
+// pageText's output, so its content just needs to say "this is a timetable".
+vi.mock('./lib/import/pdfText', () => ({
+  extractPages: vi.fn(async () => [{ width: 1, height: 1, items: [] }]),
+  pageText: vi.fn(() => 'ΠΡΟΓΡΑΜΜΑ ΜΑΘΗΜΑΤΩΝ'),
+}))
+vi.mock('./lib/import/timetableParser', () => ({
+  parseTimetable: vi.fn(() => ({ sheets: fakeSheets, lectures: fakeLectures })),
+}))
 
 /**
  * Admin route guard + dashboard, against the mock provider. Mirrors the harness
@@ -207,5 +271,59 @@ describe('admin dashboard', () => {
     // saving a change must not silently rewrite students' Google Calendars.
     await waitFor(() => (container.textContent ?? '').includes('Push to calendars'))
     expect(container.textContent).toContain('Cancel this session')
+  })
+
+  it('matches a timetable import against the catalogue instead of creating rows', async () => {
+    await signIn(true)
+    await mountAt('/admin')
+    await openTab('Import')
+    await waitFor(() => (container.textContent ?? '').includes('Import from PDF'))
+
+    const before = await (await import('./lib/data/provider')).getProvider().admin.listLectures()
+    const original = before.find((l) => l.course_code === 'TPT6-PROGRAMMATISMOS-SYSTIMATON')!
+
+    const input = container.querySelector('input[type="file"]') as HTMLInputElement
+    const file = new File(['dummy'], 'timetable.pdf', { type: 'application/pdf' })
+    Object.defineProperty(input, 'files', { value: [file], configurable: true })
+    await act(async () => {
+      input.dispatchEvent(new Event('change', { bubbles: true }))
+    })
+    await waitFor(() => (container.textContent ?? '').includes('Review lectures'))
+
+    // The matched row shows what it resolved to and is included by default.
+    await waitFor(() =>
+      (container.textContent ?? '').includes('Matches TPT6-PROGRAMMATISMOS-SYSTIMATON'),
+    )
+    const matchedCheckbox = container.querySelector(
+      'input[type="checkbox"][aria-label="Include Προγραμματισμός Συστημάτων"]',
+    ) as HTMLInputElement
+    expect(matchedCheckbox.checked).toBe(true)
+    expect(matchedCheckbox.disabled).toBe(false)
+
+    // The unmatched row is flagged, unchecked and cannot be included.
+    expect(container.textContent).toContain(
+      'No existing lecture matches this name, day and time',
+    )
+    const unmatchedCheckbox = container.querySelector(
+      'input[type="checkbox"][aria-label="Include Ένα Μάθημα Που Δεν Υπάρχει"]',
+    ) as HTMLInputElement
+    expect(unmatchedCheckbox.checked).toBe(false)
+    expect(unmatchedCheckbox.disabled).toBe(true)
+
+    const commit = [...container.querySelectorAll('button')].find(
+      (b) => b.textContent?.trim() === 'Add to semester',
+    )!
+    await act(async () => commit.click())
+    await waitFor(() => (container.textContent ?? '').includes('Added to semester: 1'))
+
+    const after = await (await import('./lib/data/provider')).getProvider().admin.listLectures()
+    // No new lecture was created, matched or not.
+    expect(after.length).toBe(before.length)
+    const updated = after.find((l) => l.course_code === 'TPT6-PROGRAMMATISMOS-SYSTIMATON')!
+    expect(updated.semester).toBe('Spring 2026')
+    // The import never overwrites day/time/room/professor — only `semester`.
+    expect(updated.room).toBe(original.room)
+    expect(updated.professor).toBe(original.professor)
+    expect(updated.end_time).toBe(original.end_time)
   })
 })
