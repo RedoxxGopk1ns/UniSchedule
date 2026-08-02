@@ -3,6 +3,9 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import App from './App'
+import { resetMockCatalogue, resetMockState } from './lib/data/mockProvider'
+import { useAuthStore } from './store/authStore'
+import { useScheduleStore } from './store/scheduleStore'
 
 /**
  * Smoke tests: do the real screens mount and render their content without
@@ -45,6 +48,14 @@ beforeEach(() => {
   container = document.createElement('div')
   document.body.appendChild(container)
   root = createRoot(container)
+
+  // The mock provider's state and the two stores are module singletons, so
+  // without this the file's tests only pass in the order they happen to be
+  // written — one that syncs a course leaves it enrolled for the next.
+  resetMockCatalogue()
+  resetMockState()
+  useAuthStore.setState({ session: null, loading: true, signingIn: false })
+  useScheduleStore.getState().reset()
 })
 
 afterEach(() => {
@@ -134,7 +145,12 @@ describe('authenticated app', () => {
   it('renders a printable schedule alongside the screen shell', async () => {
     await signIn()
     await mountAt('/dashboard')
-    await waitFor(() => container.querySelector('[data-print-root]') !== null)
+    // Wait for the enrolment to land, not merely for the print root to exist:
+    // the tree renders empty first, so the weaker condition passed only while
+    // an earlier test's entries were still in the shared store.
+    await waitFor(() =>
+      (container.querySelector('[data-print-root]')?.textContent ?? '').includes(SYSPROG_NAME),
+    )
 
     const printRoot = container.querySelector('[data-print-root]')!
     const shell = container.querySelector('[data-screen-shell]')!
@@ -163,11 +179,15 @@ describe('authenticated app', () => {
 
     await signIn()
     await mountAt('/dashboard')
-    await waitFor(() => (container.textContent ?? '').includes('Export PDF'))
+    // Export is disabled while loading and while the schedule is empty, so wait
+    // for the button to actually become usable rather than merely present.
+    const exportButton = () =>
+      [...container.querySelectorAll('button')].find((b) =>
+        b.textContent?.includes('Export PDF'),
+      )
+    await waitFor(() => exportButton()?.hasAttribute('disabled') === false)
 
-    const button = [...container.querySelectorAll('button')].find((b) =>
-      b.textContent?.includes('Export PDF'),
-    )!
+    const button = exportButton()!
     expect(button.hasAttribute('disabled')).toBe(false)
 
     await act(async () => button.click())

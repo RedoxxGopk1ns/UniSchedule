@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A second push to the same branch supersedes the first; no point finishing a
+# run whose result is already stale.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # 22.6+ is required by `npm run seed:sql` for .ts type stripping.
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      # `build` is `tsc -b && vite build`, so this is the typecheck too.
+      - name: Typecheck and build
+        run: npm run build
+
+      - name: Test
+        run: npm test
+
+      # The edge functions are deployed separately and are not covered by the
+      # build above (tsconfig.app.json includes only src/). This Deno typecheck
+      # is the only automated check they have.
+      - name: Typecheck edge functions
+        run: npm run check:functions
+
+      # seed.sql is generated from seed.ts; a hand-edit or a forgotten
+      # regeneration silently desynchronises the demo data from the database.
+      - name: Verify seed.sql is up to date
+        run: |
+          npm run seed:sql
+          git diff --exit-code supabase/seed.sql

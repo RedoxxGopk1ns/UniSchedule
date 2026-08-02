@@ -13,6 +13,7 @@ import {
   DAYS,
   type AcademicEventInput,
   type AcademicEventKind,
+  type AdminSemester,
   type DayOfWeek,
   type Lecture,
   type ScheduleEntry,
@@ -84,9 +85,13 @@ export function AdminImport() {
   const [events, setEvents] = useState<EventRow[]>([])
   const [proposed, setProposed] = useState<SemesterInput | null>(null)
   const [semester, setSemester] = useState('')
+  const [semesters, setSemesters] = useState<AdminSemester[]>([])
 
-  // Every lecture needs a semester, and the timetable PDF never names one. Seed
-  // the field from the current term so a plain timetable import is valid on
+  // Every lecture needs a semester, and the timetable PDF never names one. The
+  // field is a picker over the terms that exist rather than free text:
+  // `lectures.semester` is a foreign key the Edge Function checks on every
+  // write, so a typed name that does not exist fails every row at commit time.
+  // Defaulting to the current term keeps a plain timetable import valid on
   // arrival instead of showing 43 identical "Semester is required" errors.
   useEffect(() => {
     let alive = true
@@ -94,11 +99,12 @@ export function AdminImport() {
       .admin.listSemesters()
       .then((terms) => {
         if (!alive) return
+        setSemesters(terms)
         const current = terms.find((t) => t.is_current) ?? terms[0]
         if (current) setSemester((s) => s || current.name)
       })
       .catch(() => {
-        // Leave the field empty; the admin can type the name.
+        // Leave the picker empty; the commit button stays disabled.
       })
     return () => {
       alive = false
@@ -265,16 +271,24 @@ export function AdminImport() {
         }
         let updated = 0
         let failed = 0
+        // Kept so the toast can say *why* rows failed. Every row carries the
+        // same semester, so a bad term fails all of them identically — a bare
+        // "0 updated, 43 failed" would leave the admin with nothing to act on.
+        let firstError: string | null = null
         for (const row of chosenLectures) {
           try {
             const { id: _id, ...input } = row.match.lecture
             await admin.updateLecture(row.match.lecture.id, { ...input, semester })
             updated++
-          } catch {
+          } catch (e) {
             failed++
+            firstError ??= e instanceof Error ? e.message : String(e)
           }
         }
-        toast(copy.adminImportSyncDone(updated, failed), failed ? 'warning' : 'success')
+        toast(
+          copy.adminImportSyncDone(updated, failed, firstError),
+          failed ? 'warning' : 'success',
+        )
       }
       reset()
       setPages(null)
@@ -327,6 +341,7 @@ export function AdminImport() {
           rows={lectureRows}
           sheets={sheets}
           semester={semester}
+          semesters={semesters}
           onSemester={setSemester}
           onChange={setLecture}
           preview={previewEntries}
@@ -354,6 +369,7 @@ interface TimetableReviewProps {
   rows: ReviewRow[]
   sheets: ParsedSheet[]
   semester: string
+  semesters: AdminSemester[]
   onSemester: (value: string) => void
   onChange: (key: string, patch: Partial<LectureRow>) => void
   preview: ScheduleEntry[]
@@ -365,6 +381,7 @@ function TimetableReview({
   rows,
   sheets,
   semester,
+  semesters,
   onSemester,
   onChange,
   preview,
@@ -383,17 +400,18 @@ function TimetableReview({
           </h3>
           <p className="mt-1 max-w-[70ch] text-sm text-muted">{copy.adminImportReviewHint}</p>
         </div>
-        <Button loading={saving} onClick={onCommit} disabled={included === 0}>
+        <Button loading={saving} onClick={onCommit} disabled={included === 0 || semester === ''}>
           {copy.adminImportApplySemester}
         </Button>
       </div>
 
       <div className="mt-4 max-w-[320px]">
-        <Input
+        <Select
           label={copy.adminTabSemesters}
           value={semester}
           onChange={(e) => onSemester(e.target.value)}
-          placeholder="Spring 2026"
+          placeholder={copy.adminImportPickSemester}
+          options={semesters.map((s) => ({ value: s.name, label: s.name }))}
         />
       </div>
 

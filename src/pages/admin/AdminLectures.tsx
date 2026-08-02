@@ -13,12 +13,18 @@ import type { AdminSemester, DayOfWeek, Lecture, LectureInput } from '../../lib/
 import { matchesSearch } from '../../lib/filters'
 import { copy } from '../../lib/copy'
 import { LectureOverridesModal } from './LectureOverridesModal'
+import { catalogueOptions } from './catalogueOptions'
 import { parseLectureCsv } from './lectureCsv'
 
 /** 'HH:MM:SS' | 'HH:MM' -> 'HH:MM' for <input type="time">. */
 const hhmm = (t: string) => t.slice(0, 5)
 
-const ROOMS = [
+/**
+ * The room names the department is standardising on. These are *added* to
+ * whatever the catalogue already uses rather than replacing it — see
+ * catalogueOptions.ts for why a closed list would misrepresent existing rows.
+ */
+const CANONICAL_ROOMS = [
   'Αμφιθέατρο 1ου ορόφου',
   'Εργαστήριο 2ου ορόφου',
   'Αμφιθέατρο 2ου ορόφου',
@@ -100,6 +106,17 @@ export function AdminLectures() {
   const filtered = useMemo(
     () => lectures.filter((l) => matchesSearch(l, search)),
     [lectures, search],
+  )
+
+  // Derived from the loaded catalogue rather than hardcoded, so the pickers
+  // describe the data that is actually there — whichever backend served it.
+  const roomOptions = useMemo(
+    () => catalogueOptions(lectures.map((l) => l.room), CANONICAL_ROOMS),
+    [lectures],
+  )
+  const departmentOptions = useMemo(
+    () => catalogueOptions(lectures.map((l) => l.department)),
+    [lectures],
   )
 
   const defaultSemester =
@@ -199,6 +216,8 @@ export function AdminLectures() {
           initial={editing.input}
           isEdit={editing.id !== null}
           semesters={semesters}
+          roomOptions={roomOptions}
+          departmentOptions={departmentOptions}
           onCancel={() => setEditing(null)}
           onSaved={async (input) => {
             const api = getProvider().admin
@@ -256,12 +275,16 @@ function LectureFormModal({
   initial,
   isEdit,
   semesters,
+  roomOptions,
+  departmentOptions,
   onCancel,
   onSaved,
 }: {
   initial: LectureInput
   isEdit: boolean
   semesters: AdminSemester[]
+  roomOptions: string[]
+  departmentOptions: string[]
   onCancel: () => void
   onSaved: (input: LectureInput) => Promise<void>
 }) {
@@ -319,7 +342,13 @@ function LectureFormModal({
             label="Room"
             value={form.room ?? ''}
             onChange={(e) => set('room', e.target.value || null)}
-            options={[{ value: '', label: '—' }, ...ROOMS.map((r) => ({ value: r, label: r }))]}
+            options={[
+              { value: '', label: '—' },
+              ...catalogueOptions(roomOptions, [], form.room).map((r) => ({
+                value: r,
+                label: r,
+              })),
+            ]}
           />
           <Select
             label="Day"
@@ -351,7 +380,10 @@ function LectureFormModal({
             onChange={(e) => set('department', e.target.value || null)}
             options={[
               { value: '', label: '—' },
-              ...(initial.department ? [{ value: initial.department, label: initial.department }] : []),
+              ...catalogueOptions(departmentOptions, [], form.department).map((d) => ({
+                value: d,
+                label: d,
+              })),
             ]}
           />
           <Input

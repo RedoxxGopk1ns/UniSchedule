@@ -208,6 +208,7 @@ export const copy = {
   adminImportWarnings: 'Needs a look',
   adminImportCommit: 'Save to catalogue',
   adminImportApplySemester: 'Add to semester',
+  adminImportPickSemester: 'Pick a semester',
   adminImportPreview: 'Preview',
   adminImportSheet: (page: number, semester: number | null, year: number | null) =>
     semester === null
@@ -217,8 +218,10 @@ export const copy = {
     `The calendar describes ${name}, ${start} to ${end}. It will be created if it does not exist.`,
   adminImportDone: (created: number, failed: number) =>
     failed > 0 ? `Imported ${created}, ${failed} skipped` : `Imported ${created}`,
-  adminImportSyncDone: (updated: number, failed: number) =>
-    failed > 0 ? `Added to semester: ${updated}, ${failed} failed` : `Added to semester: ${updated}`,
+  adminImportSyncDone: (updated: number, failed: number, reason?: string | null) =>
+    failed > 0
+      ? `Added to semester: ${updated}, ${failed} failed${reason ? ` — ${reason}` : ''}`
+      : `Added to semester: ${updated}`,
   adminImportNothing: 'Nothing is selected to import.',
   adminImportRowInvalid: 'This row cannot be saved yet.',
   adminImportNoMatch:
