@@ -17,5 +17,8 @@ export default defineConfig({
       VITE_SUPABASE_ANON_KEY: '',
       VITE_ENABLE_CALENDAR_SYNC: 'false',
     },
+    // Belt to the env block's braces: fails the test rather than silently
+    // succeeding if anything ever reaches for the network.
+    setupFiles: ['./src/test/setup.ts'],
   },
 })

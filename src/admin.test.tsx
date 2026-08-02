@@ -63,11 +63,17 @@ const { fakeSheets, fakeLectures } = vi.hoisted(() => {
 // The real PDF pipeline (pdfjs, worker) has no place in jsdom; the timetable
 // review only needs a parsed result, so both are stubbed. sniff() only reads
 // pageText's output, so its content just needs to say "this is a timetable".
-vi.mock('./lib/import/pdfText', () => ({
+vi.mock('./lib/import/pdfText', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./lib/import/pdfText')>()),
   extractPages: vi.fn(async () => [{ width: 1, height: 1, items: [] }]),
   pageText: vi.fn(() => 'ΠΡΟΓΡΑΜΜΑ ΜΑΘΗΜΑΤΩΝ'),
 }))
-vi.mock('./lib/import/timetableParser', () => ({
+// Spread the real module rather than replacing it: a bare object would be an
+// unguarded whitelist, so the day anything in App's import graph reaches for
+// another export (DEPARTMENT, guessSubject) every test in this file would fail
+// at import time with an unrelated-looking error.
+vi.mock('./lib/import/timetableParser', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./lib/import/timetableParser')>()),
   parseTimetable: vi.fn(() => ({ sheets: fakeSheets, lectures: fakeLectures })),
 }))
 
@@ -208,6 +214,85 @@ describe('admin dashboard', () => {
     expect(container.textContent).toContain('New lecture')
   })
 
+  /**
+   * The edit form round-trip. This is the shape of test that was missing when
+   * Room became a dropdown whose options matched none of the catalogue's real
+   * values: React silently selects the first option when `value` matches none,
+   * emitting no warning, so the form showed '—' for 40 of 42 lectures while the
+   * table behind it showed the true room. Asserting on rendered <select> values
+   * — not just that the modal opened — is what catches that class of bug.
+   */
+  it('shows a lecture’s real values when editing, and saving untouched changes nothing', async () => {
+    await signIn(true)
+    await mountAt('/admin')
+    await openTab('Lectures')
+    await waitFor(() =>
+      (container.textContent ?? '').includes('TPT6-PROGRAMMATISMOS-SYSTIMATON'),
+    )
+
+    const { getProvider } = await import('./lib/data/provider')
+    const before = await getProvider().admin.listLectures()
+    // A lecture with a room that is *not* one of the canonical names — the
+    // exact case the dropdown used to misrepresent.
+    const target = before.find((l) => l.room === 'Αίθουσα 2.3')!
+    expect(target).toBeDefined()
+
+    const rows = [...container.querySelectorAll('tr')]
+    const row = rows.find((r) => r.textContent?.includes(target.course_code))!
+    const edit = [...row.querySelectorAll('button')].find(
+      (b) => b.textContent?.trim() === 'Edit',
+    )!
+    await act(async () => edit.click())
+    await waitFor(() => container.querySelector('[role="dialog"]') !== null)
+
+    const dialog = container.querySelector('[role="dialog"]')!
+    const field = (label: string) =>
+      [...dialog.querySelectorAll('label')].find((l) => l.textContent?.includes(label))!
+
+    // The room the lecture actually has is the one selected, not a blank.
+    const roomSelect = field('Room').querySelector('select')!
+    expect(roomSelect.value).toBe(target.room)
+    // Department must be selectable too, not a dead single-option control.
+    const deptSelect = field('Department').querySelector('select')!
+    expect(deptSelect.value).toBe(target.department)
+    expect(deptSelect.options.length).toBeGreaterThan(1)
+
+    const save = [...dialog.querySelectorAll('button')].find(
+      (b) => b.textContent?.trim() === 'Save',
+    )!
+    await act(async () => save.click())
+    await waitFor(() => (container.textContent ?? '').includes('Lecture saved'))
+
+    const after = await getProvider().admin.listLectures()
+    // Saving without touching anything must be a no-op on every field.
+    expect(after.find((l) => l.id === target.id)).toEqual(target)
+    expect(after).toHaveLength(before.length)
+  })
+
+  it('lets a new lecture be given a department', async () => {
+    await signIn(true)
+    await mountAt('/admin')
+    await openTab('Lectures')
+    await waitFor(() =>
+      (container.textContent ?? '').includes('TPT6-PROGRAMMATISMOS-SYSTIMATON'),
+    )
+
+    const add = [...container.querySelectorAll('button')].find(
+      (b) => b.textContent?.trim() === 'Add lecture',
+    )!
+    await act(async () => add.click())
+    await waitFor(() => container.querySelector('[role="dialog"]') !== null)
+
+    const dialog = container.querySelector('[role="dialog"]')!
+    const deptSelect = [...dialog.querySelectorAll('label')]
+      .find((l) => l.textContent?.includes('Department'))!
+      .querySelector('select')!
+    // Previously this collapsed to a lone blank option, so a department could
+    // never be set on a new lecture — and a null one vanishes from the filter.
+    const selectable = [...deptSelect.options].filter((o) => o.value !== '')
+    expect(selectable.length).toBeGreaterThan(0)
+  })
+
   it('manages the academic calendar on the Calendar tab', async () => {
     await signIn(true)
     await mountAt('/admin')
@@ -325,5 +410,41 @@ describe('admin dashboard', () => {
     expect(updated.room).toBe(original.room)
     expect(updated.professor).toBe(original.professor)
     expect(updated.end_time).toBe(original.end_time)
+  })
+
+  /**
+   * `lectures.semester` is a foreign key, so a typed term that does not exist
+   * fails every row at commit time — and because each row fails identically,
+   * the admin would see only "0 updated, N failed". Offering a picker over the
+   * terms that exist makes the bad state unrepresentable rather than merely
+   * reported.
+   */
+  it('offers only existing semesters to import into', async () => {
+    await signIn(true)
+    await mountAt('/admin')
+    await openTab('Import')
+    await waitFor(() => (container.textContent ?? '').includes('Import from PDF'))
+
+    const input = container.querySelector('input[type="file"]') as HTMLInputElement
+    const file = new File(['dummy'], 'timetable.pdf', { type: 'application/pdf' })
+    Object.defineProperty(input, 'files', { value: [file], configurable: true })
+    await act(async () => {
+      input.dispatchEvent(new Event('change', { bubbles: true }))
+    })
+    await waitFor(() => (container.textContent ?? '').includes('Review lectures'))
+
+    const semesterField = [...container.querySelectorAll('label')].find((l) =>
+      l.textContent?.includes('Semesters'),
+    )!
+    // A <select>, not a free-text input: a typo must not be expressible.
+    const select = semesterField.querySelector('select')
+    expect(select).not.toBeNull()
+    expect(semesterField.querySelector('input[type="text"]')).toBeNull()
+
+    const { getProvider } = await import('./lib/data/provider')
+    const terms = await getProvider().admin.listSemesters()
+    const offered = [...select!.options].map((o) => o.value).filter((v) => v !== '')
+    expect(offered).toEqual(terms.map((t) => t.name))
+    expect(select!.value).toBe('Spring 2026')
   })
 })

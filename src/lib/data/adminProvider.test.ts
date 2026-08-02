@@ -61,6 +61,33 @@ describe('admin lectures CRUD', () => {
     expect(result.errors).toHaveLength(1)
     expect(result.errors[0]!.row).toBe(2)
   })
+
+  /**
+   * `lectures.semester` is a foreign key and the Edge Function checks it on
+   * every write. These pin the mock to that behaviour: without them the PDF
+   * import's "add to semester" commit fails every row in production while
+   * passing here.
+   */
+  it('refuses a lecture filed under a semester that does not exist', async () => {
+    await expect(
+      admin().createLecture({ ...newLecture('ZZ103'), semester: 'Winter 1999' }),
+    ).rejects.toThrow(/unknown semester/i)
+  })
+
+  it('refuses to move an existing lecture to a semester that does not exist', async () => {
+    const all = await admin().listLectures()
+    const target = all[0]!
+    const { id: _id, ...input } = target
+    await expect(
+      admin().updateLecture(target.id, { ...input, semester: 'Winter 1999' }),
+    ).rejects.toThrow(/unknown semester/i)
+  })
+
+  it('rejects a bulk import naming a semester that does not exist', async () => {
+    await expect(
+      admin().bulkImportLectures([{ ...newLecture('BULK3'), semester: 'Winter 1999' }]),
+    ).rejects.toThrow(/unknown semester/i)
+  })
 })
 
 describe('admin semesters', () => {

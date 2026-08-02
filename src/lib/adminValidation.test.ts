@@ -1,6 +1,16 @@
 import { describe, expect, it } from 'vitest'
-import { validateLectureInput, validateSemesterInput } from './adminValidation'
-import type { LectureInput, SemesterInput } from './data/types'
+import {
+  validateAcademicEventInput,
+  validateLectureInput,
+  validateOverrideInput,
+  validateSemesterInput,
+} from './adminValidation'
+import type {
+  AcademicEventInput,
+  LectureInput,
+  OverrideInput,
+  SemesterInput,
+} from './data/types'
 
 const validLecture: LectureInput = {
   course_code: 'CS999',
@@ -131,5 +141,154 @@ describe('validateSemesterInput', () => {
     expect(validateSemesterInput({ ...validSemester, end_date: 'not-a-date' })).toMatch(
       /not a valid date/i,
     )
+  })
+})
+
+/**
+ * These two validators had no unit tests at all, despite being the most
+ * branch-heavy in the file — validateOverrideInput alone has a different
+ * required-field set per override kind, and the Edge Function keeps a
+ * hand-copied duplicate of both that must agree with them.
+ */
+const validEvent: AcademicEventInput = {
+  semester: 'Spring 2026',
+  kind: 'holiday',
+  title: 'Αργία 25ης Μαρτίου',
+  start_date: '2026-03-25',
+  end_date: '2026-03-25',
+  blocks_teaching: true,
+}
+
+describe('validateAcademicEventInput', () => {
+  it('accepts a valid entry', () => {
+    expect(validateAcademicEventInput(validEvent)).toBeNull()
+  })
+
+  it('accepts a single-day entry where end equals start', () => {
+    // Unlike a semester, the range is inclusive — a one-day holiday repeats the
+    // same date on both sides.
+    expect(validateAcademicEventInput({ ...validEvent, end_date: validEvent.start_date })).toBeNull()
+  })
+
+  it('rejects a blank title', () => {
+    expect(validateAcademicEventInput({ ...validEvent, title: '   ' })).toMatch(/title/i)
+  })
+
+  it('rejects an unknown kind', () => {
+    expect(
+      validateAcademicEventInput({
+        ...validEvent,
+        kind: 'party' as AcademicEventInput['kind'],
+      }),
+    ).toMatch(/kind/i)
+  })
+
+  it('rejects an end date before the start date', () => {
+    expect(validateAcademicEventInput({ ...validEvent, end_date: '2026-03-24' })).toMatch(
+      /on or after/i,
+    )
+  })
+
+  it('rejects a date that looks right but is not real', () => {
+    expect(validateAcademicEventInput({ ...validEvent, start_date: '2026-02-31' })).toMatch(
+      /start date must be a date/i,
+    )
+  })
+})
+
+const baseOverride: OverrideInput = {
+  lecture_id: 'lec-1',
+  kind: 'cancelled',
+  occurrence_date: '2026-03-02',
+  new_date: null,
+  new_start_time: null,
+  new_end_time: null,
+  new_room: null,
+  note: null,
+}
+
+describe('validateOverrideInput', () => {
+  it('accepts a cancellation, which needs nothing else', () => {
+    expect(validateOverrideInput(baseOverride)).toBeNull()
+  })
+
+  it('requires a lecture and a valid date', () => {
+    expect(validateOverrideInput({ ...baseOverride, lecture_id: ' ' })).toMatch(/lecture/i)
+    expect(validateOverrideInput({ ...baseOverride, occurrence_date: '' })).toMatch(/date/i)
+    expect(validateOverrideInput({ ...baseOverride, occurrence_date: '2026-13-01' })).toMatch(
+      /date must be a date/i,
+    )
+  })
+
+  it('requires a new date and times for a moved session', () => {
+    const moved: OverrideInput = { ...baseOverride, kind: 'moved' }
+    expect(validateOverrideInput(moved)).toMatch(/new date/i)
+    expect(validateOverrideInput({ ...moved, new_date: '2026-03-09' })).toMatch(
+      /start and end time/i,
+    )
+    expect(
+      validateOverrideInput({
+        ...moved,
+        new_date: '2026-03-09',
+        new_start_time: '09:00',
+        new_end_time: '12:00',
+      }),
+    ).toBeNull()
+  })
+
+  it('requires times for an extra session but not a new date', () => {
+    const extra: OverrideInput = { ...baseOverride, kind: 'extra' }
+    expect(validateOverrideInput(extra)).toMatch(/start and end time/i)
+    expect(
+      validateOverrideInput({ ...extra, new_start_time: '09:00', new_end_time: '12:00' }),
+    ).toBeNull()
+  })
+
+  it('rejects a moved session that ends before it starts', () => {
+    expect(
+      validateOverrideInput({
+        ...baseOverride,
+        kind: 'moved',
+        new_date: '2026-03-09',
+        new_start_time: '12:00',
+        new_end_time: '09:00',
+      }),
+    ).toMatch(/after start/i)
+  })
+
+  it('rejects a session outside the timetable window', () => {
+    expect(
+      validateOverrideInput({
+        ...baseOverride,
+        kind: 'extra',
+        new_start_time: '05:00',
+        new_end_time: '06:00',
+      }),
+    ).toMatch(/timetable/i)
+  })
+
+  it('accepts a Postgres time with seconds', () => {
+    // Existing overrides come back from the database as 'HH:MM:SS'; re-saving
+    // one must not be rejected for a shape the database itself produced.
+    expect(
+      validateOverrideInput({
+        ...baseOverride,
+        kind: 'extra',
+        new_start_time: '09:00:00',
+        new_end_time: '12:00:00',
+      }),
+    ).toBeNull()
+  })
+
+  it('requires a room for a room change', () => {
+    const roomChange: OverrideInput = { ...baseOverride, kind: 'room_change' }
+    expect(validateOverrideInput(roomChange)).toMatch(/room/i)
+    expect(validateOverrideInput({ ...roomChange, new_room: 'Αίθουσα 2.3' })).toBeNull()
+  })
+
+  it('rejects an unknown kind', () => {
+    expect(
+      validateOverrideInput({ ...baseOverride, kind: 'exploded' as OverrideInput['kind'] }),
+    ).toMatch(/change type/i)
   })
 })

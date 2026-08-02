@@ -94,6 +94,21 @@ export function resetMockCatalogue() {
   adminOverrides = []
 }
 
+/**
+ * Rejects a lecture filed under a term that does not exist.
+ *
+ * `lectures.semester` is a foreign key, and the Edge Function checks it on
+ * every write (`assertSemesterExists`, supabase/functions/admin/index.ts). The
+ * mock enforcing it too is what keeps "passes in tests, fails in production"
+ * from being a whole class of bug — the message matches the server's wording so
+ * assertions written against one hold against the other.
+ */
+function assertSemesterExists(name: string) {
+  if (!adminSemesters.some((s) => s.name === name)) {
+    throw new Error(`Unknown semester: ${name}`)
+  }
+}
+
 /** A small user fixture so the admin Users screen renders in mock mode. */
 const mockUsers: AdminUser[] = [
   {
@@ -162,6 +177,26 @@ function load(): MockState {
 }
 
 let state: MockState = load()
+
+/**
+ * Restores the demo user's session state — enrolment, passed courses, study
+ * year, sign-in, admin flag.
+ *
+ * `state` is read from localStorage once when this module is first imported, so
+ * a test calling `localStorage.clear()` does **not** get a clean slate: the
+ * in-memory object survives and leaks into whatever runs next. Resetting it
+ * explicitly is what makes the jsdom suites independent of execution order.
+ */
+export function resetMockState() {
+  localStorage.removeItem(STORAGE_KEY)
+  state = {
+    signedIn: false,
+    enrolled: [...DEFAULT_ENROLMENT],
+    studyYear: null,
+    passed: [],
+    isAdmin: false,
+  }
+}
 const listeners = new Set<(s: Session | null) => void>()
 
 function persist() {
@@ -343,6 +378,7 @@ export const mockProvider: DataProvider = {
     async createLecture(input: LectureInput) {
       const err = validateLectureInput(input)
       if (err) throw new Error(err)
+      assertSemesterExists(input.semester)
       await delay(120)
       const lecture: Lecture = { id: crypto.randomUUID(), ...input }
       adminLectures = [...adminLectures, lecture]
@@ -352,6 +388,7 @@ export const mockProvider: DataProvider = {
     async updateLecture(id: string, input: LectureInput) {
       const err = validateLectureInput(input)
       if (err) throw new Error(err)
+      assertSemesterExists(input.semester)
       await delay(120)
       const i = adminLectures.findIndex((l) => l.id === id)
       if (i < 0) throw new Error('Lecture not found')
@@ -367,6 +404,12 @@ export const mockProvider: DataProvider = {
 
     async bulkImportLectures(rows: LectureInput[]) {
       await delay(200)
+      // The Edge Function rejects the whole batch when any row names a term
+      // that does not exist, rather than importing the rest. Mirrored here so a
+      // bad semester surfaces in tests instead of only in production.
+      for (const name of new Set(rows.map((r) => r.semester))) {
+        assertSemesterExists(name)
+      }
       const errors: { row: number; message: string }[] = []
       const created: Lecture[] = []
       rows.forEach((row, i) => {
