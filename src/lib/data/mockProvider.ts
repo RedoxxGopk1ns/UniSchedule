@@ -6,7 +6,7 @@ import {
 } from '../adminValidation'
 import { applyFilters } from '../filters'
 import { dayName, minutesOfDay, toMinutes } from '../time'
-import { ACADEMIC_EVENTS, DEFAULT_ENROLMENT, LECTURES, SEMESTER } from './seed'
+import { CALENDAR, CATALOGUE, DEFAULT_ENROLMENT, SEMESTER, SEMESTERS } from './seed'
 import type { DataProvider } from './provider'
 import { DAYS } from './types'
 import type {
@@ -68,15 +68,23 @@ function currentUser(): UserProfile {
 // edits are observable within a session without touching the shared constant.
 //
 // The student-facing reads below go through these same arrays, not through the
-// frozen LECTURES import. That matters for the demo: importing a timetable and
+// frozen CATALOGUE import. That matters for the demo: importing a timetable and
 // then seeing it on the dashboard is the whole point of the Import screen, and
 // it has to work with no network.
-let adminLectures: Lecture[] = LECTURES.map((x) => ({ ...x }))
-let adminSemesters: AdminSemester[] = [
-  { ...SEMESTER, time_zone: 'Europe/Athens', is_current: true, lecture_count: LECTURES.length },
-]
-let adminEvents: AcademicEvent[] = ACADEMIC_EVENTS.map((x) => ({ ...x }))
+let adminLectures: Lecture[] = CATALOGUE.map((x) => ({ ...x }))
+let adminSemesters: AdminSemester[] = seedSemesters()
+let adminEvents: AcademicEvent[] = CALENDAR.map((x) => ({ ...x }))
 let adminOverrides: LectureOverride[] = []
+
+/** The fixture's terms as admin rows. The real one is the current term. */
+function seedSemesters(): AdminSemester[] {
+  return SEMESTERS.map((s) => ({
+    ...s,
+    time_zone: 'Europe/Athens',
+    is_current: s.name === SEMESTER.name,
+    lecture_count: CATALOGUE.filter((l) => l.semester === s.name).length,
+  }))
+}
 
 /**
  * Restores the catalogue to the seed fixture.
@@ -86,11 +94,9 @@ let adminOverrides: LectureOverride[] = []
  * `beforeEach` alongside the store resets.
  */
 export function resetMockCatalogue() {
-  adminLectures = LECTURES.map((x) => ({ ...x }))
-  adminSemesters = [
-    { ...SEMESTER, time_zone: 'Europe/Athens', is_current: true, lecture_count: LECTURES.length },
-  ]
-  adminEvents = ACADEMIC_EVENTS.map((x) => ({ ...x }))
+  adminLectures = CATALOGUE.map((x) => ({ ...x }))
+  adminSemesters = seedSemesters()
+  adminEvents = CALENDAR.map((x) => ({ ...x }))
   adminOverrides = []
 }
 
@@ -261,6 +267,17 @@ export const mockProvider: DataProvider = {
 
   async getSemester() {
     return SEMESTER
+  },
+
+  async listSemesters() {
+    // Read off the admin rows rather than the seed constant, so editing a
+    // semester's dates in the admin screens moves the dashboard's teaching
+    // window with it.
+    return adminSemesters.map(({ name, start_date, end_date }) => ({
+      name,
+      start_date,
+      end_date,
+    }))
   },
 
   async listLectures(filters: LectureFilters = {}) {

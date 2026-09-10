@@ -103,6 +103,17 @@ export interface DataProvider {
 
   // Catalogue
   getSemester(): Promise<Semester>
+  /**
+   * Every semester's teaching window, readable by any signed-in student.
+   *
+   * Distinct from `getSemester`, which answers "which term is it now" for the
+   * catalogue. This answers "when is this lecture taught", which is a different
+   * question once a student's enrolments outlive the term they were made in —
+   * see `withinTerm` in src/lib/occurrences.ts. Not the same as
+   * `admin.listSemesters`, which returns the editable rows behind the admin
+   * gate; this one carries only the dates and needs no role.
+   */
+  listSemesters(): Promise<Semester[]>
   listLectures(filters?: LectureFilters): Promise<Lecture[]>
 
   /**

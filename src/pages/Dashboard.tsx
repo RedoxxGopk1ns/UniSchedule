@@ -2,6 +2,7 @@ import { useNavigate } from 'react-router-dom'
 import { Header } from '../components/layout/Header'
 import { EmptySchedule } from '../components/schedule/EmptySchedule'
 import { GridSkeleton } from '../components/schedule/GridSkeleton'
+import { OutOfTerm } from '../components/schedule/OutOfTerm'
 import { PrintableSchedule } from '../components/schedule/PrintableSchedule'
 import { WeekChanges } from '../components/schedule/WeekChanges'
 import { WeeklyGrid } from '../components/schedule/WeeklyGrid'
@@ -22,7 +23,7 @@ export function Dashboard() {
 
   // This week resolved against the academic calendar and any one-off changes
   // (§22). In an ordinary week these are the plain entries.
-  const { occurrences, changes } = useWeek()
+  const { occurrences, changes, outOfTerm } = useWeek()
   const weekEntries = occurrencesToEntries(occurrences)
 
   return (
@@ -60,6 +61,8 @@ export function Dashboard() {
                 <GridSkeleton />
               ) : entries.length === 0 ? (
                 <EmptySchedule />
+              ) : outOfTerm ? (
+                <OutOfTerm />
               ) : (
                 <>
                   <WeekChanges changes={changes} />

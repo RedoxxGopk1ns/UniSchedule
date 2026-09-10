@@ -11,7 +11,7 @@
 import { writeFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { ACADEMIC_EVENTS, LECTURES, SEMESTER } from '../src/lib/data/seed.ts'
+import { CALENDAR, CATALOGUE, SEMESTER, SEMESTERS } from '../src/lib/data/seed.ts'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const out = resolve(here, '../supabase/seed.sql')
@@ -23,7 +23,13 @@ const q = (value) =>
 /** Booleans and integers are literals in SQL, not quoted strings. */
 const raw = (value) => (value === null || value === undefined ? 'null' : String(value))
 
-const rows = LECTURES.map(
+const semesterRows = SEMESTERS.map(
+  (s) =>
+    `  (${q(s.name)}, ${q(s.start_date)}, ${q(s.end_date)}, 'Europe/Athens', ` +
+    `${raw(s.name === SEMESTER.name)})`,
+).join(',\n')
+
+const rows = CATALOGUE.map(
   (l) =>
     `  (${q(l.id)}, ${q(l.course_code)}, ${q(l.course_name)}, ${q(l.professor)}, ` +
     `${q(l.room)}, ${q(l.day_of_week)}, ${q(l.start_time)}, ${q(l.end_time)}, ` +
@@ -31,7 +37,7 @@ const rows = LECTURES.map(
     `${q(l.subject)}, ${raw(l.is_mandatory)}, ${raw(l.study_year)})`,
 ).join(',\n')
 
-const eventRows = ACADEMIC_EVENTS.map(
+const eventRows = CALENDAR.map(
   (e) =>
     `  (${q(e.id)}, ${q(e.semester)}, ${q(e.kind)}, ${q(e.title)}, ` +
     `${q(e.start_date)}, ${q(e.end_date)}, ${raw(e.blocks_teaching)})`,
@@ -44,9 +50,14 @@ const sql = `-- GENERATED FILE — do not edit by hand.
 -- parsed from the university's own timetable and academic calendar PDFs. It
 -- contains the real Monday 12:00-15:00 clash between Εφαρμογές Τηλεματικής and
 -- the Προγραμματισμός Συστημάτων lab, which exercises the §8.4 conflict warning.
+--
+-- It also carries the fictional 'Demo Term' — DEMO-* codes, 'Demo Lecturer'
+-- staff — which exists so the app can be demonstrated during an active term
+-- once the real spring one has ended. Drop those rows to remove it.
 
 insert into public.semesters (name, start_date, end_date, time_zone, is_current)
-values (${q(SEMESTER.name)}, ${q(SEMESTER.start_date)}, ${q(SEMESTER.end_date)}, 'Europe/Athens', true)
+values
+${semesterRows}
 on conflict (name) do update
   set start_date = excluded.start_date,
       end_date   = excluded.end_date;
@@ -88,5 +99,6 @@ on conflict (id) do update
 
 writeFileSync(out, sql, 'utf8')
 console.log(
-  `Wrote ${LECTURES.length} lectures and ${ACADEMIC_EVENTS.length} academic events to supabase/seed.sql`,
+  `Wrote ${SEMESTERS.length} semesters, ${CATALOGUE.length} lectures and ` +
+    `${CALENDAR.length} academic events to supabase/seed.sql`,
 )

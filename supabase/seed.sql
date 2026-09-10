@@ -5,9 +5,15 @@
 -- parsed from the university's own timetable and academic calendar PDFs. It
 -- contains the real Monday 12:00-15:00 clash between Εφαρμογές Τηλεματικής and
 -- the Προγραμματισμός Συστημάτων lab, which exercises the §8.4 conflict warning.
+--
+-- It also carries the fictional 'Demo Term' — DEMO-* codes, 'Demo Lecturer'
+-- staff — which exists so the app can be demonstrated during an active term
+-- once the real spring one has ended. Drop those rows to remove it.
 
 insert into public.semesters (name, start_date, end_date, time_zone, is_current)
-values ('Spring 2026', '2026-02-24', '2026-06-05', 'Europe/Athens', true)
+values
+  ('Spring 2026', '2026-02-24', '2026-06-05', 'Europe/Athens', true),
+  ('Demo Term (summer 2026)', '2026-06-15', '2026-09-30', 'Europe/Athens', false)
 on conflict (name) do update
   set start_date = excluded.start_date,
       end_date   = excluded.end_date;
@@ -56,7 +62,15 @@ values
   ('00000000-0000-4000-8000-000000000040', 'TPT8-ASFALEIA-PAGKOSMIO', 'Ασφάλεια στον Παγκόσμιο Ιστό', 'Π. Ριζομυλιώτης', 'Αίθουσα 3.9', 'Thursday', '12:00', '15:00', 'Spring 2026', 'Πληροφορικής και Τηλεματικής', '#6B7280', 'Ασφάλεια', false, 4),
   ('00000000-0000-4000-8000-000000000041', 'TPT8-APOTIMISI-EPENDYSEON', 'Αποτίμηση Επενδύσεων ΤΠΕ', 'Χ. Μιχαλακέλης', 'Αίθουσα 3.9', 'Thursday', '15:00', '18:00', 'Spring 2026', 'Πληροφορικής και Τηλεματικής', '#6B7280', 'Πληροφοριακά συστήματα', false, 4),
   ('00000000-0000-4000-8000-000000000042', 'TPT8-DIACHEIRISI-MEGALOU', 'Διαχείριση μεγάλου όγκου δεδομένων και σημασιολογικός ιστός', 'Β. Ευθυμίου', 'Αίθουσα 3.9', 'Friday', '12:00', '15:00', 'Spring 2026', 'Πληροφορικής και Τηλεματικής', '#6B7280', 'Δεδομένα', false, 4),
-  ('00000000-0000-4000-8000-000000000043', 'TPT8-ANAKTISI-PLIROFORIAS', 'Ανάκτηση Πληροφορίας και Επεξεργασία Φυσικής Γλώσσας', 'Η. Βαρλάμης', 'εργ.4ου ορόφου', 'Friday', '15:00', '18:00', 'Spring 2026', 'Πληροφορικής και Τηλεματικής', '#6B7280', 'Τεχνητή νοημοσύνη', false, 4)
+  ('00000000-0000-4000-8000-000000000043', 'TPT8-ANAKTISI-PLIROFORIAS', 'Ανάκτηση Πληροφορίας και Επεξεργασία Φυσικής Γλώσσας', 'Η. Βαρλάμης', 'εργ.4ου ορόφου', 'Friday', '15:00', '18:00', 'Spring 2026', 'Πληροφορικής και Τηλεματικής', '#6B7280', 'Τεχνητή νοημοσύνη', false, 4),
+  ('00000000-0000-4000-8000-0000000000d1', 'DEMO-101', 'Demo Course 101 — Introduction', 'Demo Lecturer A', 'Demo Room 1', 'Monday', '09:00', '11:00', 'Demo Term (summer 2026)', 'Demo Department', '#6B7280', 'Demo courses', true, 3),
+  ('00000000-0000-4000-8000-0000000000d2', 'DEMO-102', 'Demo Course 102 — Weekly Lecture', 'Demo Lecturer B', 'Demo Room 2', 'Monday', '11:00', '13:00', 'Demo Term (summer 2026)', 'Demo Department', '#6B7280', 'Demo courses', false, 3),
+  ('00000000-0000-4000-8000-0000000000d3', 'DEMO-103', 'Demo Course 103 — Laboratory', 'Demo Lecturer B', 'Demo Lab', 'Monday', '12:00', '15:00', 'Demo Term (summer 2026)', 'Demo Department', '#6B7280', 'Demo courses', false, 3),
+  ('00000000-0000-4000-8000-0000000000d4', 'DEMO-104', 'Demo Course 104 — Afternoon Seminar', 'Demo Lecturer C', 'Demo Room 1', 'Tuesday', '15:00', '18:00', 'Demo Term (summer 2026)', 'Demo Department', '#6B7280', 'Demo courses', false, 3),
+  ('00000000-0000-4000-8000-0000000000d5', 'DEMO-105', 'Demo Course 105 — Midweek Workshop', 'Demo Lecturer A', null, 'Wednesday', '09:00', '12:00', 'Demo Term (summer 2026)', 'Demo Department', '#6B7280', 'Demo courses', false, 3),
+  ('00000000-0000-4000-8000-0000000000d6', 'DEMO-106', 'Demo Course 106 — Evening Class', 'Demo Lecturer C', 'Demo Room 2', 'Thursday', '19:00', '22:00', 'Demo Term (summer 2026)', 'Demo Department', '#6B7280', 'Demo courses', false, 4),
+  ('00000000-0000-4000-8000-0000000000d7', 'DEMO-107', 'Demo Course 107 — Group 1', 'Demo Lecturer B', 'Demo Lab', 'Friday', '09:00', '10:30', 'Demo Term (summer 2026)', 'Demo Department', '#6B7280', 'Demo courses', false, 3),
+  ('00000000-0000-4000-8000-0000000000d8', 'DEMO-107', 'Demo Course 107 — Group 2', 'Demo Lecturer B', 'Demo Lab', 'Friday', '10:30', '12:00', 'Demo Term (summer 2026)', 'Demo Department', '#6B7280', 'Demo courses', false, 3)
 on conflict (id) do update
   set course_code  = excluded.course_code,
       course_name  = excluded.course_name,
@@ -101,7 +115,11 @@ values
   ('00000000-0000-4000-8000-000000001021', null, 'makeup_week', 'Εβδομάδα αναπληρώσεων μαθημάτων, εργαστηρίων κλπ', '2026-06-08', '2026-06-12', false),
   ('00000000-0000-4000-8000-000000001022', null, 'exam_period', 'Έναρξη Εξεταστικής Περιόδου εαρινού εξαμήνου 2025-2026', '2026-06-15', '2026-06-15', true),
   ('00000000-0000-4000-8000-000000001023', null, 'exam_period', 'Λήξη Εξεταστικής Περιόδου εαρινού εξαμήνου 2025-2026', '2026-07-03', '2026-07-03', true),
-  ('00000000-0000-4000-8000-000000001024', null, 'presentations', 'Παρουσιάσεις πτυχιακών εργασιών', '2026-06-30', '2026-07-10', false)
+  ('00000000-0000-4000-8000-000000001024', null, 'presentations', 'Παρουσιάσεις πτυχιακών εργασιών', '2026-06-30', '2026-07-10', false),
+  ('00000000-0000-4000-8000-000000002001', null, 'teaching_start', 'Demo term — teaching starts', '2026-06-15', '2026-06-15', false),
+  ('00000000-0000-4000-8000-000000002002', null, 'holiday', 'Demo holiday — no classes', '2026-08-17', '2026-08-17', true),
+  ('00000000-0000-4000-8000-000000002003', null, 'break', 'Demo break — no classes', '2026-09-07', '2026-09-11', true),
+  ('00000000-0000-4000-8000-000000002004', null, 'teaching_end', 'Demo term — teaching ends', '2026-09-30', '2026-09-30', false)
 on conflict (id) do update
   set semester        = excluded.semester,
       kind            = excluded.kind,

@@ -18,6 +18,7 @@ import type {
   DayOfWeek,
   LectureOverride,
   ScheduleEntry,
+  Semester,
 } from './data/types'
 import { DAYS } from './data/types'
 
@@ -27,6 +28,13 @@ import { DAYS } from './data/types'
  * `moved-out` is kept rather than dropped so the grid can leave a struck-through
  * marker in the original slot — a student looking at Monday should see that the
  * class was moved, not find an unexplained gap.
+ *
+ * `out-of-term` is the opposite: the session is not merely off, it is outside
+ * the semester the lecture belongs to and there is nothing to explain. It is
+ * emitted rather than dropped so the callers that need to know the difference
+ * between "no lectures this week" and "no lectures selected" can — see
+ * `isOutOfTerm`. Nothing renders it: `occurrencesToEntries` and `weekChanges`
+ * both filter it out.
  */
 export type OccurrenceStatus =
   | 'normal'
@@ -35,6 +43,7 @@ export type OccurrenceStatus =
   | 'moved-in'
   | 'room-changed'
   | 'extra'
+  | 'out-of-term'
 
 export interface ResolvedOccurrence {
   entry: ScheduleEntry
@@ -112,18 +121,49 @@ export function isTeachingBlocked(events: AcademicEvent[], date: string): boolea
 }
 
 /**
+ * Whether a lecture's weekly pattern still produces a session on `date`.
+ *
+ * This is the client twin of the RRULE's UNTIL clause. `buildRecurrence` in
+ * supabase/functions/_shared/recurrence.ts bounds every series by its own
+ * semester's start and end, so a Spring lecture stops recurring in Google
+ * Calendar the day the term ends. Without this check the grid kept drawing it
+ * through the summer, disagreeing with the calendar it is supposed to mirror.
+ *
+ * Fails open when the semester is not in `semesters`: a teaching window we
+ * cannot see is not a reason to blank a student's timetable, and `semesters` is
+ * empty whenever the fetch behind it failed.
+ */
+export function withinTerm(
+  semesters: Semester[],
+  semesterName: string,
+  date: string,
+): boolean {
+  const semester = semesters.find((s) => s.name === semesterName)
+  if (!semester) return true
+  return date >= semester.start_date && date <= semester.end_date
+}
+
+/**
  * Every session in the week containing `reference`, with holidays and overrides
  * already applied.
  *
  * Order of precedence matters: an explicit override wins over a holiday. If the
  * department schedules a make-up class on a day the calendar calls a break,
  * the class happens.
+ *
+ * The semester window is the one thing that outranks an override, because it
+ * bounds the weekly pattern itself rather than a single instance of it — a
+ * cancellation pinned to a date the series never reaches describes nothing.
+ * Sessions carrying their own date (moved-in, extra) are exempt: those are
+ * standalone one-off events in Calendar too, created by `overrideSession`
+ * outside the RRULE, so the two stay consistent.
  */
 export function resolveWeek(
   entries: ScheduleEntry[],
   overrides: LectureOverride[],
   events: AcademicEvent[],
   reference: Date = new Date(),
+  semesters: Semester[] = [],
 ): ResolvedOccurrence[] {
   const dates = weekDates(reference)
   const inWeek = new Set(Object.values(dates))
@@ -136,7 +176,9 @@ export function resolveWeek(
 
     // --- The regular occurrence, if the pattern produces one this week -----
     const onDate = mine.find((o) => o.occurrence_date === date && o.kind !== 'extra')
-    if (onDate?.kind === 'cancelled') {
+    if (!withinTerm(semesters, lecture.semester, date)) {
+      out.push(occurrence(entry, date, 'out-of-term', null))
+    } else if (onDate?.kind === 'cancelled') {
       out.push(occurrence(entry, date, 'cancelled', onDate.note))
     } else if (onDate?.kind === 'moved') {
       out.push(occurrence(entry, date, 'moved-out', onDate.note))
@@ -215,23 +257,42 @@ function dayOf(date: string): DayOfWeek {
 export function occurrencesToEntries(
   occurrences: ResolvedOccurrence[],
 ): (ScheduleEntry & { occurrence: ResolvedOccurrence })[] {
-  return occurrences.map((o) => ({
-    ...o.entry,
-    // A single entry can appear twice in one week (moved out of Monday, into
-    // Wednesday), so the id has to distinguish them or React reuses the block.
-    id: `${o.entry.id}@${o.date}:${o.status}`,
-    lecture: {
-      ...o.entry.lecture,
-      day_of_week: o.day_of_week,
-      start_time: o.start_time,
-      end_time: o.end_time,
-      room: o.room,
-    },
-    occurrence: o,
-  }))
+  return occurrences
+    // Outside the semester there is no block to strike through — the lecture
+    // simply is not taught this week.
+    .filter((o) => o.status !== 'out-of-term')
+    .map((o) => ({
+      ...o.entry,
+      // A single entry can appear twice in one week (moved out of Monday, into
+      // Wednesday), so the id has to distinguish them or React reuses the block.
+      id: `${o.entry.id}@${o.date}:${o.status}`,
+      lecture: {
+        ...o.entry.lecture,
+        day_of_week: o.day_of_week,
+        start_time: o.start_time,
+        end_time: o.end_time,
+        room: o.room,
+      },
+      occurrence: o,
+    }))
 }
 
 /** This week's changes, for the dashboard banner. Holidays first, then edits. */
 export function weekChanges(occurrences: ResolvedOccurrence[]): ResolvedOccurrence[] {
-  return occurrences.filter((o) => o.status !== 'normal')
+  // 'out-of-term' is not a change to the week — it is the week not existing.
+  // Listing it would put one line in the banner per enrolled lecture, every
+  // week of the summer.
+  return occurrences.filter((o) => o.status !== 'normal' && o.status !== 'out-of-term')
+}
+
+/**
+ * True when the resolved week contains lectures but none of them are taught,
+ * because every one sits outside its semester.
+ *
+ * The dashboard needs this to tell two empty grids apart: a student who has
+ * selected nothing yet (prompt them to pick courses) and a student whose term
+ * has ended (their selection is fine, there is just no teaching this week).
+ */
+export function isOutOfTerm(occurrences: ResolvedOccurrence[]): boolean {
+  return occurrences.length > 0 && occurrences.every((o) => o.status === 'out-of-term')
 }

@@ -123,6 +123,12 @@ export const copy = {
   occurrenceMovedTo: (day: string, time: string) => `Moved to ${day} ${time}`,
   occurrenceMovedFrom: (day: string) => `Moved from ${day}`,
 
+  // Weeks outside the semester's teaching period (§22)
+  outOfTermTitle: 'No lectures this week.',
+  outOfTermSubtitle:
+    'Your courses are outside the teaching period for their semester. They will reappear here when teaching resumes.',
+  outOfTermCta: 'Review your courses',
+
   // Admin
   adminNav: 'Admin',
   adminTitle: 'Admin',

@@ -14,9 +14,13 @@ const REFRESH_MS = 5 * 60 * 1000
  *
  * `occurrences` is this week resolved against the academic calendar (see
  * useWeek). Sessions that are not happening — a public holiday, a cancellation,
- * a class moved to another day — are dropped from the result: telling a student
- * their next lecture is one that was cancelled is worse than telling them
- * nothing.
+ * a class moved to another day, or a week outside the lecture's own semester —
+ * are dropped from the result: telling a student their next lecture is one that
+ * was cancelled is worse than telling them nothing.
+ *
+ * The provider's own `getUpcoming` knows none of this; it reads the weekly
+ * pattern straight from the enrolments, which is why the filtering happens here
+ * rather than there.
  *
  * Sessions moved *into* this week are not added here. The provider computes
  * `Upcoming` from the weekly pattern and does not know about them; they show up
@@ -51,7 +55,11 @@ export function useUpcoming(occurrences: ResolvedOccurrence[] = []) {
   const suppressed = useMemo(() => {
     const off = new Set<string>()
     for (const o of occurrences) {
-      if (o.status === 'cancelled' || o.status === 'moved-out') {
+      if (
+        o.status === 'cancelled' ||
+        o.status === 'moved-out' ||
+        o.status === 'out-of-term'
+      ) {
         off.add(`${o.entry.lecture_id}|${o.day_of_week}`)
       }
     }

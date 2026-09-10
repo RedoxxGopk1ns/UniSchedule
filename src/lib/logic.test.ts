@@ -1,7 +1,16 @@
 import { describe, expect, it } from 'vitest'
 import { describeConflict, detectConflicts } from './conflicts'
-import { DEFAULT_ENROLMENT, LECTURES } from './data/seed'
+import {
+  CATALOGUE,
+  DEFAULT_ENROLMENT,
+  DEMO_LECTURES,
+  DEMO_SEMESTER,
+  LECTURES,
+  SEMESTER,
+  SEMESTERS,
+} from './data/seed'
 import { DAYS, type Lecture, type ScheduleEntry } from './data/types'
+import { withinTerm } from './occurrences'
 import { computeDiff, isEmptyDiff, unsyncedLectureIds, withBackfill } from './diff'
 import { activeFilterCount, applyFilters, bandOf } from './filters'
 import { layoutDay, layoutWeek } from './layout'
@@ -42,6 +51,54 @@ const ARCH_FRI = '00000000-0000-4000-8000-000000000009'
 const SYSPROG = 'TPT6-PROGRAMMATISMOS-SYSTIMATON'
 const DATABASES = 'TPT4-VASEIS-DEDOMENON'
 const DEPARTMENT = 'Πληροφορικής και Τηλεματικής'
+
+describe('demo term fixture', () => {
+  const demo = (code: string) => DEMO_LECTURES.filter((l) => l.course_code === code)
+
+  it('is the term teaching over the summer, when the real one is not', () => {
+    // The reason it exists: the real catalogue closed on 05/06/2026, so without
+    // this term the app cannot be shown with an active semester after that.
+    for (const day of ['2026-06-15', '2026-08-05', '2026-09-30']) {
+      expect(withinTerm(SEMESTERS, DEMO_SEMESTER.name, day)).toBe(true)
+      expect(withinTerm(SEMESTERS, SEMESTER.name, day)).toBe(false)
+    }
+  })
+
+  it('leaves the real catalogue and the current term alone', () => {
+    expect(LECTURES.some((l) => l.semester === DEMO_SEMESTER.name)).toBe(false)
+    expect(CATALOGUE).toHaveLength(LECTURES.length + DEMO_LECTURES.length)
+    // The admin Import screen defaults to the current term; moving the flag onto
+    // a fictional one would quietly file real imports under it.
+    expect(SEMESTERS[0]!.name).toBe(SEMESTER.name)
+  })
+
+  it('is named so no row can be mistaken for the department catalogue', () => {
+    for (const l of DEMO_LECTURES) {
+      expect(l.semester).toBe(DEMO_SEMESTER.name)
+      expect(l.course_code).toMatch(/^DEMO-/)
+      expect(l.course_name).toMatch(/^Demo /)
+      expect(l.professor).toMatch(/^Demo Lecturer /)
+      expect(l.department).toBe('Demo Department')
+    }
+  })
+
+  it('carries the Monday overlap the conflict warning is meant to catch', () => {
+    const conflicts = detectConflicts(DEMO_LECTURES)
+    expect(conflicts).toHaveLength(1)
+    expect(conflicts[0]!.day).toBe('Monday')
+    expect([conflicts[0]!.a.course_code, conflicts[0]!.b.course_code].sort()).toEqual([
+      'DEMO-102',
+      'DEMO-103',
+    ])
+  })
+
+  it('splits one course into two sections, and fits inside the grid', () => {
+    expect(demo('DEMO-107')).toHaveLength(2)
+    // Including the 19:00–22:00 class, which is what the evening end of the
+    // 07:00–23:00 window is for.
+    expect(DEMO_LECTURES.every((l) => isWithinGrid(l.start_time, l.end_time))).toBe(true)
+  })
+})
 
 describe('time', () => {
   it('maps the top of the grid to slot 0', () => {
