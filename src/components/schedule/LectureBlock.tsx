@@ -14,8 +14,15 @@ interface LectureBlockProps {
   status?: OccurrenceStatus
 }
 
-/** Short badge shown on a block whose session is not running as usual. */
-const STATUS_LABEL: Record<Exclude<OccurrenceStatus, 'normal'>, string> = {
+/**
+ * Short badge shown on a block whose session is not running as usual.
+ *
+ * 'out-of-term' has no label because it never reaches a block: those
+ * occurrences are dropped by `occurrencesToEntries`, since a week outside the
+ * semester has nothing to strike through. Every other status must be listed,
+ * which is what makes adding one a compile error rather than a blank badge.
+ */
+const STATUS_LABEL: Record<Exclude<OccurrenceStatus, 'normal' | 'out-of-term'>, string> = {
   cancelled: copy.occurrenceCancelled,
   'moved-out': copy.occurrenceMovedOut,
   'moved-in': copy.occurrenceMovedIn,
@@ -41,7 +48,8 @@ export const LectureBlock = forwardRef<HTMLButtonElement, LectureBlockProps>(
     const { lecture } = entry
     const stripe = lecture.color_tag ?? 'var(--color-ink)'
     const off = status === 'cancelled' || status === 'moved-out'
-    const badge = status === 'normal' ? null : STATUS_LABEL[status]
+    const badge =
+      status === 'normal' || status === 'out-of-term' ? null : STATUS_LABEL[status]
 
     return (
       <button

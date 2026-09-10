@@ -29,6 +29,15 @@ beforeEach(() => {
   ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT =
     true
 
+  // Pin the clock inside the seeded semester (Wednesday 11/03/2026). The grid
+  // only draws a lecture on weeks its semester is actually teaching (§22, see
+  // withinTerm), so a suite run on a real date outside Spring 2026 renders the
+  // out-of-term notice and every assertion below fails for the wrong reason.
+  // Only Date is faked, and it still advances with real time, so the mock
+  // provider's simulated latency and waitFor's own deadline both still work.
+  vi.useFakeTimers({ toFake: ['Date'], shouldAdvanceTime: true })
+  vi.setSystemTime(new Date('2026-03-11T10:00:00Z'))
+
   // jsdom implements neither of these, and both are used during first render.
   vi.stubGlobal(
     'matchMedia',
@@ -63,6 +72,7 @@ afterEach(() => {
   container.remove()
   localStorage.clear()
   vi.unstubAllGlobals()
+  vi.useRealTimers()
 })
 
 /** Mounts the app at a route. */
@@ -140,6 +150,50 @@ describe('authenticated app', () => {
     expect(text).toContain('Today')
     // A seeded lecture made it into the grid.
     expect(text).toContain(SYSPROG_NAME)
+  })
+
+  it('replaces the grid with a notice once the semester has ended', async () => {
+    // Ten weeks after Spring 2026 closed. The enrolment is untouched, so this
+    // must not read as "you have not picked any courses" (§22).
+    vi.setSystemTime(new Date('2026-08-05T10:00:00Z'))
+
+    await signIn()
+    await mountAt('/dashboard')
+    await waitFor(() => (container.textContent ?? '').includes('No lectures this week.'))
+
+    const text = container.textContent ?? ''
+    expect(text).not.toContain('No lectures added yet.')
+    expect(text).toContain('teaching resumes')
+    // No blocks, and nothing in the changes banner either.
+    expect(container.querySelector('[role="grid"]')).toBeNull()
+    expect(text).not.toContain('changes to your schedule this week')
+    // The sidebar stops counting down to a lecture that is not happening.
+    expect(text).toContain('No more classes today.')
+  })
+
+  it('draws the demo term on that same summer week', async () => {
+    // The other half of the story above: the demo fixture exists so the app can
+    // still be shown with a live semester once the real spring term has closed.
+    vi.setSystemTime(new Date('2026-08-05T10:00:00Z'))
+    await signIn()
+
+    const { getProvider } = await import('./lib/data/provider')
+    const provider = getProvider()
+    const spring = await provider.getMySchedule()
+    await provider.syncSchedule({
+      to_add: ['00000000-0000-4000-8000-0000000000d1'], // DEMO-101, Mon 09:00
+      to_remove: spring.map((e) => ({
+        lecture_id: e.lecture_id,
+        google_event_id: e.google_event_id,
+      })),
+    })
+
+    await mountAt('/dashboard')
+    await waitFor(() => container.querySelector('[role="grid"]') !== null)
+
+    const text = container.textContent ?? ''
+    expect(text).toContain('Demo Course 101 — Introduction')
+    expect(text).not.toContain('No lectures this week.')
   })
 
   it('renders a printable schedule alongside the screen shell', async () => {

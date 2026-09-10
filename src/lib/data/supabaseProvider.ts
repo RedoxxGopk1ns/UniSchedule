@@ -180,6 +180,19 @@ export const supabaseProvider: DataProvider = {
     return data as Semester
   },
 
+  async listSemesters(): Promise<Semester[]> {
+    const { data, error } = await supabase()
+      .from('semesters')
+      .select('name, start_date, end_date')
+      .order('start_date')
+
+    // Empty on failure, not the bundled constant: an unknown window makes
+    // `withinTerm` fail open and the grid behaves as it did before this
+    // existed. Guessing a window here would hide real lectures instead.
+    if (error || !data) return []
+    return data as Semester[]
+  },
+
   async listLectures(filters: LectureFilters = {}): Promise<Lecture[]> {
     let query = supabase()
       .from('lectures')

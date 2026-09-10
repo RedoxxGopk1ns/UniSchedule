@@ -1,12 +1,20 @@
 import { describe, expect, it } from 'vitest'
-import type { AcademicEvent, Lecture, LectureOverride, ScheduleEntry } from './data/types'
+import type {
+  AcademicEvent,
+  Lecture,
+  LectureOverride,
+  ScheduleEntry,
+  Semester,
+} from './data/types'
 import {
+  isOutOfTerm,
   isTeachingBlocked,
   occurrencesToEntries,
   resolveWeek,
   startOfWeek,
   weekChanges,
   weekDates,
+  withinTerm,
 } from './occurrences'
 
 const lecture: Lecture = {
@@ -66,8 +74,17 @@ const makeupWeek: AcademicEvent = {
   blocks_teaching: false,
 }
 
+/** The real spring term: opens on a Tuesday, closes on Friday 05/06/2026. */
+const SPRING: Semester = {
+  name: 'Spring 2026',
+  start_date: '2026-02-24',
+  end_date: '2026-06-05',
+}
+
 // A Wednesday inside the week of Monday 09/03/2026.
 const IN_WEEK = new Date('2026-03-11T10:00:00Z')
+// A Wednesday in the summer, ten weeks after the term ended.
+const AFTER_TERM = new Date('2026-08-05T10:00:00Z')
 
 describe('weekDates', () => {
   it('runs Monday to Friday of the containing week', () => {
@@ -98,6 +115,97 @@ describe('isTeachingBlocked', () => {
   it('is true inside a holiday and false during a make-up week', () => {
     expect(isTeachingBlocked([holiday, makeupWeek], '2026-06-01')).toBe(true)
     expect(isTeachingBlocked([holiday, makeupWeek], '2026-06-10')).toBe(false)
+  })
+})
+
+describe('withinTerm', () => {
+  it('spans the semester inclusive of both end dates', () => {
+    expect(withinTerm([SPRING], 'Spring 2026', '2026-02-24')).toBe(true)
+    expect(withinTerm([SPRING], 'Spring 2026', '2026-06-05')).toBe(true)
+    expect(withinTerm([SPRING], 'Spring 2026', '2026-02-23')).toBe(false)
+    expect(withinTerm([SPRING], 'Spring 2026', '2026-06-08')).toBe(false)
+  })
+
+  it('fails open for a semester it has never heard of', () => {
+    // The list is empty whenever the fetch behind it failed, and a timetable
+    // that blanks itself on a network error is worse than a stale one.
+    expect(withinTerm([], 'Spring 2026', '2026-08-03')).toBe(true)
+    expect(withinTerm([SPRING], 'Fall 2026', '2026-08-03')).toBe(true)
+  })
+})
+
+describe('resolveWeek outside the semester', () => {
+  it('stops drawing a lecture once its term has ended', () => {
+    // The bug this exists for: the seeded calendar has no summer entry, so no
+    // holiday covers August and the block used to render as an ordinary class.
+    const week = resolveWeek([entry], [], [], AFTER_TERM, [SPRING])
+    expect(week.map((o) => o.status)).toEqual(['out-of-term'])
+    expect(occurrencesToEntries(week)).toEqual([])
+    // Not a "change this week" either — that banner would otherwise carry one
+    // line per enrolled course, all summer.
+    expect(weekChanges(week)).toEqual([])
+    expect(isOutOfTerm(week)).toBe(true)
+  })
+
+  it('stops drawing it before the term starts too', () => {
+    const week = resolveWeek([entry], [], [], new Date('2026-02-04T10:00:00Z'), [SPRING])
+    expect(week.map((o) => o.status)).toEqual(['out-of-term'])
+  })
+
+  it('keeps drawing it while the term runs', () => {
+    const week = resolveWeek([entry], [], [], IN_WEEK, [SPRING])
+    expect(week.map((o) => o.status)).toEqual(['normal'])
+    expect(isOutOfTerm(week)).toBe(false)
+  })
+
+  it('matches Calendar by letting an explicitly dated session through', () => {
+    // buildRecurrence bounds the RRULE by the semester, but overrideSession
+    // creates moved and extra sessions as standalone one-off events outside it.
+    // The grid has to agree, or a make-up class in the exam period vanishes.
+    const week = resolveWeek(
+      [entry],
+      [
+        override({
+          id: 'ovr-extra',
+          kind: 'extra',
+          occurrence_date: '2026-08-06',
+          new_start_time: '09:00',
+          new_end_time: '11:00',
+        }),
+      ],
+      [],
+      AFTER_TERM,
+      [SPRING],
+    )
+    expect(week.map((o) => o.status)).toEqual(['out-of-term', 'extra'])
+    expect(occurrencesToEntries(week).map((e) => e.lecture.day_of_week)).toEqual([
+      'Thursday',
+    ])
+    expect(isOutOfTerm(week)).toBe(false)
+  })
+
+  it('outranks a cancellation pinned to a date the series never reaches', () => {
+    const week = resolveWeek(
+      [entry],
+      [override({ kind: 'cancelled', occurrence_date: '2026-08-03', note: 'stale' })],
+      [],
+      AFTER_TERM,
+      [SPRING],
+    )
+    expect(week.map((o) => o.status)).toEqual(['out-of-term'])
+    expect(week[0]!.note).toBeNull()
+  })
+
+  it('leaves the week alone when no semester window is known', () => {
+    expect(resolveWeek([entry], [], [], AFTER_TERM).map((o) => o.status)).toEqual([
+      'normal',
+    ])
+  })
+
+  it('is not out of term merely because nothing is enrolled', () => {
+    // An empty schedule is the student's doing, not the calendar's — the
+    // dashboard shows them different things.
+    expect(isOutOfTerm(resolveWeek([], [], [], AFTER_TERM, [SPRING]))).toBe(false)
   })
 })
 

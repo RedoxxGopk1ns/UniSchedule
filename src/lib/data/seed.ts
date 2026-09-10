@@ -102,6 +102,86 @@ export const ACADEMIC_EVENTS: AcademicEvent[] = [
   { id: '00000000-0000-4000-8000-000000001024', semester: null, kind: 'presentations', title: 'Παρουσιάσεις πτυχιακών εργασιών', start_date: '2026-06-30', end_date: '2026-07-10', blocks_teaching: false },
 ]
 
+// ---------------------------------------------------------------------------
+// Demo term
+//
+// A fictional term that exists only so the app can be shown working during an
+// active semester. Everything above is a snapshot of spring 2025-2026, and a
+// lecture is only drawn on weeks its own term is teaching (§22, `withinTerm`),
+// so outside February-June the real catalogue correctly renders as out of term
+// — correct, and useless for a demo.
+//
+// Every value below is named so it cannot be mistaken for the department's real
+// timetable: 'DEMO-' codes, 'Demo Lecturer' staff, 'Demo Department'. Deleting
+// the four exports in this section removes the whole thing.
+// ---------------------------------------------------------------------------
+
+/** Spans the 2026 summer, so this is the term that is live today. */
+export const DEMO_SEMESTER: Semester = {
+  name: 'Demo Term (summer 2026)',
+  // A Monday: validateSemesterInput rejects a term opening at the weekend.
+  start_date: '2026-06-15',
+  end_date: '2026-09-30',
+}
+
+/**
+ * Every term in the fixture. The real one stays first and stays `is_current` —
+ * the demo term does not need that flag (its calendar entries are filed under a
+ * null semester, see below), and moving it would change which term the admin
+ * Import screen defaults to.
+ */
+export const SEMESTERS: Semester[] = [SEMESTER, DEMO_SEMESTER]
+
+const DEMO_DEPARTMENT = 'Demo Department'
+const DEMO_SUBJECT = 'Demo courses'
+const DEMO_COLOR = '#6B7280'
+
+/**
+ * A week built to exercise the things worth demonstrating: a Monday overlap for
+ * the §8.4 conflict warning, one course split into two sections, a lecture with
+ * no room so the fallback shows, and all three time bands including one class
+ * late enough to reach the bottom of the 07:00-23:00 grid.
+ */
+export const DEMO_LECTURES: Lecture[] = [
+  { id: '00000000-0000-4000-8000-0000000000d1', course_code: 'DEMO-101', course_name: 'Demo Course 101 — Introduction', professor: 'Demo Lecturer A', room: 'Demo Room 1', day_of_week: 'Monday', start_time: '09:00', end_time: '11:00', semester: DEMO_SEMESTER.name, department: DEMO_DEPARTMENT, color_tag: DEMO_COLOR, subject: DEMO_SUBJECT, is_mandatory: true, study_year: 3 },
+  { id: '00000000-0000-4000-8000-0000000000d2', course_code: 'DEMO-102', course_name: 'Demo Course 102 — Weekly Lecture', professor: 'Demo Lecturer B', room: 'Demo Room 2', day_of_week: 'Monday', start_time: '11:00', end_time: '13:00', semester: DEMO_SEMESTER.name, department: DEMO_DEPARTMENT, color_tag: DEMO_COLOR, subject: DEMO_SUBJECT, is_mandatory: false, study_year: 3 },
+  // Overlaps DEMO-102 by an hour — this is the pair the conflict warning fires on.
+  { id: '00000000-0000-4000-8000-0000000000d3', course_code: 'DEMO-103', course_name: 'Demo Course 103 — Laboratory', professor: 'Demo Lecturer B', room: 'Demo Lab', day_of_week: 'Monday', start_time: '12:00', end_time: '15:00', semester: DEMO_SEMESTER.name, department: DEMO_DEPARTMENT, color_tag: DEMO_COLOR, subject: DEMO_SUBJECT, is_mandatory: false, study_year: 3 },
+  { id: '00000000-0000-4000-8000-0000000000d4', course_code: 'DEMO-104', course_name: 'Demo Course 104 — Afternoon Seminar', professor: 'Demo Lecturer C', room: 'Demo Room 1', day_of_week: 'Tuesday', start_time: '15:00', end_time: '18:00', semester: DEMO_SEMESTER.name, department: DEMO_DEPARTMENT, color_tag: DEMO_COLOR, subject: DEMO_SUBJECT, is_mandatory: false, study_year: 3 },
+  { id: '00000000-0000-4000-8000-0000000000d5', course_code: 'DEMO-105', course_name: 'Demo Course 105 — Midweek Workshop', professor: 'Demo Lecturer A', room: null, day_of_week: 'Wednesday', start_time: '09:00', end_time: '12:00', semester: DEMO_SEMESTER.name, department: DEMO_DEPARTMENT, color_tag: DEMO_COLOR, subject: DEMO_SUBJECT, is_mandatory: false, study_year: 3 },
+  { id: '00000000-0000-4000-8000-0000000000d6', course_code: 'DEMO-106', course_name: 'Demo Course 106 — Evening Class', professor: 'Demo Lecturer C', room: 'Demo Room 2', day_of_week: 'Thursday', start_time: '19:00', end_time: '22:00', semester: DEMO_SEMESTER.name, department: DEMO_DEPARTMENT, color_tag: DEMO_COLOR, subject: DEMO_SUBJECT, is_mandatory: false, study_year: 4 },
+  { id: '00000000-0000-4000-8000-0000000000d7', course_code: 'DEMO-107', course_name: 'Demo Course 107 — Group 1', professor: 'Demo Lecturer B', room: 'Demo Lab', day_of_week: 'Friday', start_time: '09:00', end_time: '10:30', semester: DEMO_SEMESTER.name, department: DEMO_DEPARTMENT, color_tag: DEMO_COLOR, subject: DEMO_SUBJECT, is_mandatory: false, study_year: 3 },
+  { id: '00000000-0000-4000-8000-0000000000d8', course_code: 'DEMO-107', course_name: 'Demo Course 107 — Group 2', professor: 'Demo Lecturer B', room: 'Demo Lab', day_of_week: 'Friday', start_time: '10:30', end_time: '12:00', semester: DEMO_SEMESTER.name, department: DEMO_DEPARTMENT, color_tag: DEMO_COLOR, subject: DEMO_SUBJECT, is_mandatory: false, study_year: 3 },
+]
+
+/**
+ * Calendar entries for the demo term, filed under a null semester on purpose.
+ *
+ * Both providers fetch the *current* term's rows plus the year-wide (null) ones,
+ * and the current term is still the real spring one — null is what makes these
+ * reach the grid without moving `is_current`. They give the §22 features
+ * something to show: a struck-through Monday and a week the grid calls off.
+ */
+export const DEMO_ACADEMIC_EVENTS: AcademicEvent[] = [
+  { id: '00000000-0000-4000-8000-000000002001', semester: null, kind: 'teaching_start', title: 'Demo term — teaching starts', start_date: '2026-06-15', end_date: '2026-06-15', blocks_teaching: false },
+  { id: '00000000-0000-4000-8000-000000002002', semester: null, kind: 'holiday', title: 'Demo holiday — no classes', start_date: '2026-08-17', end_date: '2026-08-17', blocks_teaching: true },
+  { id: '00000000-0000-4000-8000-000000002003', semester: null, kind: 'break', title: 'Demo break — no classes', start_date: '2026-09-07', end_date: '2026-09-11', blocks_teaching: true },
+  { id: '00000000-0000-4000-8000-000000002004', semester: null, kind: 'teaching_end', title: 'Demo term — teaching ends', start_date: '2026-09-30', end_date: '2026-09-30', blocks_teaching: false },
+]
+
+/**
+ * What the app actually serves: the real timetable plus the demo term.
+ *
+ * `LECTURES` and `ACADEMIC_EVENTS` stay untouched above so a regenerated block
+ * from `npm run import:parse -- --seed` can be pasted straight over them, and so
+ * the tests and the landing-page preview that assert against the department's
+ * real catalogue keep meaning what they say.
+ */
+export const CATALOGUE: Lecture[] = [...LECTURES, ...DEMO_LECTURES]
+
+/** The academic calendar the app serves, real entries plus the demo term's. */
+export const CALENDAR: AcademicEvent[] = [...ACADEMIC_EVENTS, ...DEMO_ACADEMIC_EVENTS]
+
 /** Every subject in the catalogue, for the filter pill. */
 export const SUBJECTS = [...new Set(LECTURES.map((x) => x.subject!))].sort()
 

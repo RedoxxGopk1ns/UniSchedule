@@ -18,6 +18,12 @@ let root: Root
 
 beforeEach(() => {
   ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+  // Pin the clock inside the seeded semester — see the same block in
+  // render.test.tsx. Outside Spring 2026 the dashboard shows the out-of-term
+  // notice rather than a grid, and the override test below also builds its
+  // occurrence date from "this week".
+  vi.useFakeTimers({ toFake: ['Date'], shouldAdvanceTime: true })
+  vi.setSystemTime(new Date('2026-03-11T10:00:00Z'))
   vi.stubGlobal('matchMedia', (query: string) => ({
     matches: false, // desktop layout — full weekly grid, all toggle pills visible
     media: query,
@@ -45,6 +51,7 @@ afterEach(() => {
   container.remove()
   localStorage.clear()
   vi.unstubAllGlobals()
+  vi.useRealTimers()
 })
 
 async function mountAt(path: string) {
