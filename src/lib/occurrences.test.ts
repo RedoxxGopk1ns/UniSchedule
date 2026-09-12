@@ -19,7 +19,8 @@ import {
 
 const lecture: Lecture = {
   id: 'lec-1',
-  course_code: 'TPT6-PROGRAMMATISMOS-SYSTIMATON',
+  course_id: 'course-1',
+  course_code: 'ΕΠ02',
   course_name: 'Προγραμματισμός Συστημάτων',
   professor: 'Εξωτερικός Διδάσκων',
   room: 'Αίθουσα 2.3',

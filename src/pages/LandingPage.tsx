@@ -7,16 +7,22 @@ import { Pill } from '../components/ui/Pill'
 import { GoogleMark } from '../components/ui/icons'
 import { useAuth } from '../hooks/useAuth'
 import { copy } from '../lib/copy'
-import { DEFAULT_ENROLMENT, LECTURES } from '../lib/data/seed'
+import { LECTURES, SPRING_ENROLMENT } from '../lib/data/seed'
 import type { ScheduleEntry } from '../lib/data/types'
 
 /**
  * Preview data for the hero card. A live grid rather than a screenshot: it can
  * never drift from the real component, and there is no image to ship.
  */
-const PREVIEW_ENTRIES: ScheduleEntry[] = DEFAULT_ENROLMENT.map((id) => {
-  const lecture = LECTURES.find((l) => l.id === id)!
-  return { id: `preview-${id}`, lecture_id: id, google_event_id: null, lecture }
+const PREVIEW_ENTRIES: ScheduleEntry[] = SPRING_ENROLMENT.flatMap((id) => {
+  // The real spring catalogue, not the demo term: this is the marketing page,
+  // and 'Demo Course 101' is not what it should be advertising. flatMap rather
+  // than a `!` assertion so a stale id thins the preview instead of crashing
+  // the landing page.
+  const lecture = LECTURES.find((l) => l.id === id)
+  return lecture
+    ? [{ id: `preview-${id}`, lecture_id: id, google_event_id: null, lecture }]
+    : []
 })
 
 /** Marketing page (§8.1). Unauthenticated, no data fetching. */

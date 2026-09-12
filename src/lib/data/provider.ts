@@ -8,12 +8,15 @@ import type {
   AdminUser,
   AdminUserDetail,
   BulkImportResult,
+  Course,
+  CourseInput,
   LectureFilters,
   Lecture,
   LectureInput,
   LectureOverride,
   OverrideInput,
   OverridePublishResult,
+  ReplaceScheduleResult,
   ScheduleEntry,
   Semester,
   SemesterInput,
@@ -30,12 +33,30 @@ import type {
  * these is gated by AdminRoute, but that gate is UX, not security.
  */
 export interface AdminApi {
-  // Catalogue — the full table, unfiltered by student rules.
+  // Courses — what the department teaches. Hand-maintained; a timetable import
+  // reads this table but never writes to it.
+  listCourses(): Promise<Course[]>
+  createCourse(input: CourseInput): Promise<Course>
+  updateCourse(id: string, input: CourseInput): Promise<Course>
+  deleteCourse(id: string): Promise<void>
+
+  // Lectures — when and where a course meets, per term. Every field not listed
+  // on LectureInput is inherited from the course on read.
   listLectures(): Promise<Lecture[]>
   createLecture(input: LectureInput): Promise<Lecture>
   updateLecture(id: string, input: LectureInput): Promise<Lecture>
   deleteLecture(id: string): Promise<void>
   bulkImportLectures(rows: LectureInput[]): Promise<BulkImportResult>
+  /**
+   * Replaces one term's timetable wholesale — deletes every lecture in
+   * `semester`, then inserts `rows`. This is what committing a parsed
+   * timetable PDF does; see ReplaceScheduleResult for why it replaces rather
+   * than diffs.
+   */
+  replaceSemesterSchedule(
+    semester: string,
+    rows: LectureInput[],
+  ): Promise<ReplaceScheduleResult>
 
   // Semesters
   listSemesters(): Promise<AdminSemester[]>

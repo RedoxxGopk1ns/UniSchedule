@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { describeConflict, detectConflicts } from './conflicts'
 import {
   CATALOGUE,
-  DEFAULT_ENROLMENT,
+  SPRING_ENROLMENT,
   DEMO_LECTURES,
   DEMO_SEMESTER,
   LECTURES,
@@ -33,7 +33,9 @@ const entry = (lecture: Lecture): ScheduleEntry => ({
   lecture,
 })
 
-const mine = DEFAULT_ENROLMENT.map((id) => entry(byId(id)))
+// The spring half only: `byId` looks rows up in the real-only LECTURES, and
+// these tests are about the real timetable's own clashes.
+const mine = SPRING_ENROLMENT.map((id) => entry(byId(id)))
 
 // Third-year rows from the real spring catalogue. The two Monday 12:00-15:00
 // entries genuinely clash in the published timetable, which is what the
@@ -48,8 +50,8 @@ const ARCH_WED = '00000000-0000-4000-8000-000000000007'
 const ARCH_FRI = '00000000-0000-4000-8000-000000000009'
 
 /** Course codes with exactly two sections each, for the passed-course rules. */
-const SYSPROG = 'TPT6-PROGRAMMATISMOS-SYSTIMATON'
-const DATABASES = 'TPT4-VASEIS-DEDOMENON'
+const SYSPROG = 'ΕΠ02'
+const DATABASES = 'ΥΠ16'
 const DEPARTMENT = 'Πληροφορικής και Τηλεματικής'
 
 describe('demo term fixture', () => {
@@ -171,7 +173,7 @@ describe('detectConflicts', () => {
     expect(conflicts).toHaveLength(1)
     expect(conflicts[0]!.day).toBe('Monday')
     expect(describeConflict(conflicts[0]!)).toBe(
-      `TPT6-EFARMOGES-TILEMATIKIS overlaps with ${SYSPROG} on Monday 12:00–15:00`,
+      `ΕΠ32 overlaps with ${SYSPROG} on Monday 12:00–15:00`,
     )
   })
 

@@ -17,9 +17,9 @@ import { useScheduleStore } from './store/scheduleStore'
 
 // Catalogue rows the assertions below hang off. Both run Monday 12:00–15:00 in
 // the department's published timetable, which is the clash these tests use.
-const SYSPROG = 'TPT6-PROGRAMMATISMOS-SYSTIMATON'
+const SYSPROG = 'ΕΠ02'
 const SYSPROG_NAME = 'Προγραμματισμός Συστημάτων'
-const TELEMATICS = 'TPT6-EFARMOGES-TILEMATIKIS'
+const TELEMATICS = 'ΕΠ32'
 
 let container: HTMLDivElement
 let root: Root
@@ -153,9 +153,12 @@ describe('authenticated app', () => {
   })
 
   it('replaces the grid with a notice once the semester has ended', async () => {
-    // Ten weeks after Spring 2026 closed. The enrolment is untouched, so this
-    // must not read as "you have not picked any courses" (§22).
-    vi.setSystemTime(new Date('2026-08-05T10:00:00Z'))
+    // After *every* seeded term has closed — the spring one and the demo one
+    // alike. The default enrolment deliberately spans both (see
+    // DEFAULT_ENROLMENT), so a date inside the demo term would correctly draw a
+    // grid and prove nothing about §22. The enrolment is untouched, so this
+    // must not read as "you have not picked any courses".
+    vi.setSystemTime(new Date('2027-08-04T10:00:00Z'))
 
     await signIn()
     await mountAt('/dashboard')
@@ -171,22 +174,13 @@ describe('authenticated app', () => {
     expect(text).toContain('No more classes today.')
   })
 
-  it('draws the demo term on that same summer week', async () => {
+  it('draws the demo term on a week the spring term has already closed', async () => {
     // The other half of the story above: the demo fixture exists so the app can
     // still be shown with a live semester once the real spring term has closed.
+    // Ten weeks after Spring 2026 ended, and well inside the demo term — which
+    // is what the default enrolment relies on to not be empty out of season.
     vi.setSystemTime(new Date('2026-08-05T10:00:00Z'))
     await signIn()
-
-    const { getProvider } = await import('./lib/data/provider')
-    const provider = getProvider()
-    const spring = await provider.getMySchedule()
-    await provider.syncSchedule({
-      to_add: ['00000000-0000-4000-8000-0000000000d1'], // DEMO-101, Mon 09:00
-      to_remove: spring.map((e) => ({
-        lecture_id: e.lecture_id,
-        google_event_id: e.google_event_id,
-      })),
-    })
 
     await mountAt('/dashboard')
     await waitFor(() => container.querySelector('[role="grid"]') !== null)

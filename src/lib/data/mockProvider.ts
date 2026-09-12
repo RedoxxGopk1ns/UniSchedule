@@ -1,14 +1,23 @@
 import {
   validateAcademicEventInput,
+  validateCourseInput,
   validateLectureInput,
   validateOverrideInput,
   validateSemesterInput,
 } from '../adminValidation'
 import { applyFilters } from '../filters'
 import { dayName, minutesOfDay, toMinutes } from '../time'
-import { CALENDAR, CATALOGUE, DEFAULT_ENROLMENT, SEMESTER, SEMESTERS } from './seed'
+import {
+  ALL_COURSES,
+  CALENDAR,
+  DEFAULT_ENROLMENT,
+  DEMO_SCHEDULE,
+  SCHEDULE,
+  SEMESTER,
+  SEMESTERS,
+} from './seed'
 import type { DataProvider } from './provider'
-import { DAYS } from './types'
+import { DAYS, joinCourse } from './types'
 import type {
   AcademicEvent,
   AcademicEventInput,
@@ -16,10 +25,13 @@ import type {
   AdminUser,
   AdminUserDetail,
   BulkImportResult,
+  Course,
+  CourseInput,
   LectureFilters,
   Lecture,
   LectureInput,
   LectureOverride,
+  LectureRow,
   OverrideInput,
   OverridePublishResult,
   ScheduleEntry,
@@ -71,10 +83,28 @@ function currentUser(): UserProfile {
 // frozen CATALOGUE import. That matters for the demo: importing a timetable and
 // then seeing it on the dashboard is the whole point of the Import screen, and
 // it has to work with no network.
-let adminLectures: Lecture[] = CATALOGUE.map((x) => ({ ...x }))
+let adminCourses: Course[] = ALL_COURSES.map((x) => ({ ...x }))
+let adminSchedule: LectureRow[] = [...SCHEDULE, ...DEMO_SCHEDULE].map((x) => ({ ...x }))
 let adminSemesters: AdminSemester[] = seedSemesters()
 let adminEvents: AcademicEvent[] = CALENDAR.map((x) => ({ ...x }))
 let adminOverrides: LectureOverride[] = []
+
+/**
+ * The stored rows joined to their courses — the mock's stand-in for the
+ * PostgREST embed the Supabase provider does.
+ *
+ * Recomputed on every read rather than cached, which is what makes a course
+ * rename show up on its lectures immediately: there is no copy of the course
+ * fields anywhere to go stale. A row whose course was deleted is dropped, the
+ * same outcome as the `on delete cascade` in migration 0006.
+ */
+function joinedLectures(): Lecture[] {
+  const byId = new Map(adminCourses.map((c) => [c.id, c]))
+  return adminSchedule.flatMap((row) => {
+    const course = byId.get(row.course_id)
+    return course ? [joinCourse(row, course)] : []
+  })
+}
 
 /** The fixture's terms as admin rows. The real one is the current term. */
 function seedSemesters(): AdminSemester[] {
@@ -82,7 +112,8 @@ function seedSemesters(): AdminSemester[] {
     ...s,
     time_zone: 'Europe/Athens',
     is_current: s.name === SEMESTER.name,
-    lecture_count: CATALOGUE.filter((l) => l.semester === s.name).length,
+    lecture_count: [...SCHEDULE, ...DEMO_SCHEDULE].filter((l) => l.semester === s.name)
+      .length,
   }))
 }
 
@@ -94,7 +125,8 @@ function seedSemesters(): AdminSemester[] {
  * `beforeEach` alongside the store resets.
  */
 export function resetMockCatalogue() {
-  adminLectures = CATALOGUE.map((x) => ({ ...x }))
+  adminCourses = ALL_COURSES.map((x) => ({ ...x }))
+  adminSchedule = [...SCHEDULE, ...DEMO_SCHEDULE].map((x) => ({ ...x }))
   adminSemesters = seedSemesters()
   adminEvents = CALENDAR.map((x) => ({ ...x }))
   adminOverrides = []
@@ -113,6 +145,53 @@ function assertSemesterExists(name: string) {
   if (!adminSemesters.some((s) => s.name === name)) {
     throw new Error(`Unknown semester: ${name}`)
   }
+}
+
+/** Rejects a lecture pointing at a course that is not there (the FK). */
+function assertCourseExists(id: string) {
+  if (!adminCourses.some((c) => c.id === id)) {
+    throw new Error(`Unknown course: ${id}`)
+  }
+}
+
+/**
+ * Rejects a duplicate course title.
+ *
+ * `courses.course_name` is unique in the database because a timetable import
+ * matches on it; two courses sharing a title would make every row of that
+ * title ambiguous and un-importable.
+ */
+function assertCourseTitleFree(name: string, exceptId?: string) {
+  const taken = adminCourses.some(
+    (c) => c.id !== exceptId && c.course_name.trim() === name.trim(),
+  )
+  if (taken) throw new Error(`A course named ${name.trim()} already exists.`)
+}
+
+/** One stored row joined to its course, for the CRUD methods' return value. */
+function joinLecture(row: LectureRow): Lecture {
+  const course = adminCourses.find((c) => c.id === row.course_id)
+  if (!course) throw new Error(`Unknown course: ${row.course_id}`)
+  return joinCourse(row, course)
+}
+
+/** Validates a batch of lecture inputs into stored rows, collecting errors. */
+function buildRows(rows: LectureInput[]) {
+  const errors: { row: number; message: string }[] = []
+  const created: LectureRow[] = []
+  rows.forEach((row, i) => {
+    const err = validateLectureInput(row) ?? courseError(row.course_id)
+    if (err) {
+      errors.push({ row: i + 1, message: err })
+      return
+    }
+    created.push({ id: crypto.randomUUID(), ...row })
+  })
+  return { created, errors }
+}
+
+function courseError(id: string): string | null {
+  return adminCourses.some((c) => c.id === id) ? null : `Unknown course: ${id}`
 }
 
 /** A small user fixture so the admin Users screen renders in mock mode. */
@@ -220,7 +299,7 @@ const delay = (ms = 260) => new Promise((r) => setTimeout(r, ms))
 
 function entriesFor(ids: string[]): ScheduleEntry[] {
   return ids
-    .map((id) => adminLectures.find((x) => x.id === id))
+    .map((id) => joinedLectures().find((x) => x.id === id))
     .filter((x): x is Lecture => Boolean(x))
     .map((lecture) => ({
       id: `mock-${lecture.id}`,
@@ -282,7 +361,7 @@ export const mockProvider: DataProvider = {
 
   async listLectures(filters: LectureFilters = {}) {
     await delay()
-    return applyFilters(adminLectures, filters, { studyYear: state.studyYear }).sort(
+    return applyFilters(joinedLectures(), filters, { studyYear: state.studyYear }).sort(
       (a, b) =>
         DAYS.indexOf(a.day_of_week) - DAYS.indexOf(b.day_of_week) ||
         toMinutes(a.start_time) - toMinutes(b.start_time),
@@ -380,43 +459,80 @@ export const mockProvider: DataProvider = {
   // In-memory admin surface. Operates on the mutable copies above so create /
   // edit / delete are observable within a session; there is no real backend.
   admin: {
+    async listCourses() {
+      await delay(120)
+      return adminCourses
+        .map((x) => ({ ...x }))
+        .sort((a, b) => a.course_name.localeCompare(b.course_name))
+    },
+
+    async createCourse(input: CourseInput) {
+      const err = validateCourseInput(input)
+      if (err) throw new Error(err)
+      assertCourseTitleFree(input.course_name)
+      await delay(120)
+      const course: Course = { id: crypto.randomUUID(), ...input }
+      adminCourses = [...adminCourses, course]
+      return { ...course }
+    },
+
+    async updateCourse(id: string, input: CourseInput) {
+      const err = validateCourseInput(input)
+      if (err) throw new Error(err)
+      assertCourseTitleFree(input.course_name, id)
+      await delay(120)
+      if (!adminCourses.some((c) => c.id === id)) throw new Error('Course not found')
+      const updated: Course = { id, ...input }
+      adminCourses = adminCourses.map((c) => (c.id === id ? updated : c))
+      // Nothing else to write: every lecture of this course reads its name and
+      // lecturer through joinedLectures(), so they inherit the edit as-is.
+      return { ...updated }
+    },
+
+    async deleteCourse(id: string) {
+      await delay(120)
+      adminCourses = adminCourses.filter((c) => c.id !== id)
+      // Mirrors `on delete cascade` in migration 0006 — a course's lectures
+      // have no meaning without it.
+      adminSchedule = adminSchedule.filter((l) => l.course_id !== id)
+    },
+
     async listLectures() {
       await delay(120)
-      return adminLectures
-        .map((x) => ({ ...x }))
-        .sort(
-          (a, b) =>
-            a.course_code.localeCompare(b.course_code) ||
-            DAYS.indexOf(a.day_of_week) - DAYS.indexOf(b.day_of_week) ||
-            toMinutes(a.start_time) - toMinutes(b.start_time),
-        )
+      return joinedLectures().sort(
+        (a, b) =>
+          a.course_code.localeCompare(b.course_code) ||
+          DAYS.indexOf(a.day_of_week) - DAYS.indexOf(b.day_of_week) ||
+          toMinutes(a.start_time) - toMinutes(b.start_time),
+      )
     },
 
     async createLecture(input: LectureInput) {
       const err = validateLectureInput(input)
       if (err) throw new Error(err)
       assertSemesterExists(input.semester)
+      assertCourseExists(input.course_id)
       await delay(120)
-      const lecture: Lecture = { id: crypto.randomUUID(), ...input }
-      adminLectures = [...adminLectures, lecture]
-      return { ...lecture }
+      const row: LectureRow = { id: crypto.randomUUID(), ...input }
+      adminSchedule = [...adminSchedule, row]
+      return joinLecture(row)
     },
 
     async updateLecture(id: string, input: LectureInput) {
       const err = validateLectureInput(input)
       if (err) throw new Error(err)
       assertSemesterExists(input.semester)
+      assertCourseExists(input.course_id)
       await delay(120)
-      const i = adminLectures.findIndex((l) => l.id === id)
-      if (i < 0) throw new Error('Lecture not found')
-      const updated: Lecture = { id, ...input }
-      adminLectures = adminLectures.map((l) => (l.id === id ? updated : l))
-      return { ...updated }
+      if (!adminSchedule.some((l) => l.id === id)) throw new Error('Lecture not found')
+      const row: LectureRow = { id, ...input }
+      adminSchedule = adminSchedule.map((l) => (l.id === id ? row : l))
+      return joinLecture(row)
     },
 
     async deleteLecture(id: string) {
       await delay(120)
-      adminLectures = adminLectures.filter((l) => l.id !== id)
+      adminSchedule = adminSchedule.filter((l) => l.id !== id)
     },
 
     async bulkImportLectures(rows: LectureInput[]) {
@@ -427,18 +543,28 @@ export const mockProvider: DataProvider = {
       for (const name of new Set(rows.map((r) => r.semester))) {
         assertSemesterExists(name)
       }
-      const errors: { row: number; message: string }[] = []
-      const created: Lecture[] = []
-      rows.forEach((row, i) => {
-        const err = validateLectureInput(row)
-        if (err) {
-          errors.push({ row: i + 1, message: err })
-          return
-        }
-        created.push({ id: crypto.randomUUID(), ...row })
-      })
-      adminLectures = [...adminLectures, ...created]
+      const { created, errors } = buildRows(rows)
+      adminSchedule = [...adminSchedule, ...created]
       return { created: created.length, errors }
+    },
+
+    async replaceSemesterSchedule(semester: string, rows: LectureInput[]) {
+      assertSemesterExists(semester)
+      // Every row must belong to the term being replaced, or the delete below
+      // would drop lectures the caller never offered to put back.
+      for (const row of rows) {
+        if (row.semester !== semester) {
+          throw new Error(`Row is filed under ${row.semester}, not ${semester}.`)
+        }
+      }
+      await delay(200)
+      const { created, errors } = buildRows(rows)
+      const doomed = adminSchedule.filter((l) => l.semester === semester)
+      adminSchedule = [
+        ...adminSchedule.filter((l) => l.semester !== semester),
+        ...created,
+      ]
+      return { deleted: doomed.length, created: created.length, errors }
     },
 
     async listAcademicEvents(semester?: string) {
@@ -492,7 +618,7 @@ export const mockProvider: DataProvider = {
     async listOverrides(semester?: string) {
       await delay(120)
       const inSemester = new Set(
-        adminLectures.filter((l) => !semester || l.semester === semester).map((l) => l.id),
+        adminSchedule.filter((l) => !semester || l.semester === semester).map((l) => l.id),
       )
       return adminOverrides
         .filter((o) => inSemester.has(o.lecture_id))
@@ -547,7 +673,7 @@ export const mockProvider: DataProvider = {
       await delay(120)
       return adminSemesters.map((s) => ({
         ...s,
-        lecture_count: adminLectures.filter((l) => l.semester === s.name).length,
+        lecture_count: adminSchedule.filter((l) => l.semester === s.name).length,
       }))
     },
 
@@ -584,7 +710,7 @@ export const mockProvider: DataProvider = {
 
     async deleteSemester(name: string) {
       await delay(120)
-      if (adminLectures.some((l) => l.semester === name)) {
+      if (adminSchedule.some((l) => l.semester === name)) {
         throw new Error('Cannot delete a semester that still has lectures.')
       }
       adminSemesters = adminSemesters.filter((s) => s.name !== name)
@@ -641,7 +767,8 @@ export const mockProvider: DataProvider = {
         totals: {
           users: mockUsers.length,
           admins: mockUsers.filter((u) => u.role === 'admin').length,
-          lectures: adminLectures.length,
+          courses: adminCourses.length,
+          lectures: adminSchedule.length,
           enrollments,
           semesters: adminSemesters.length,
         },
@@ -650,12 +777,14 @@ export const mockProvider: DataProvider = {
           users_with_refresh_token: withRefresh,
           adoption_rate: mockUsers.length ? connected / mockUsers.length : 0,
         },
-        top_courses: adminLectures.slice(0, 5).map((l, i) => ({
-          lecture_id: l.id,
-          course_code: l.course_code,
-          course_name: l.course_name,
-          count: 12 - i * 2,
-        })),
+        top_courses: joinedLectures()
+          .slice(0, 5)
+          .map((l, i) => ({
+            lecture_id: l.id,
+            course_code: l.course_code,
+            course_name: l.course_name,
+            count: 12 - i * 2,
+          })),
       }
     },
   },

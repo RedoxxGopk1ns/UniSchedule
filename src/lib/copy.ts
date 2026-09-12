@@ -134,6 +134,7 @@ export const copy = {
   adminTitle: 'Admin',
   adminSubtitle: 'Manage the catalogue, semesters, users, and see usage.',
   adminTabOverview: 'Overview',
+  adminTabCourses: 'Courses',
   adminTabLectures: 'Lectures',
   adminTabSemesters: 'Semesters',
   adminTabUsers: 'Users',
@@ -142,11 +143,31 @@ export const copy = {
   statUsers: 'Users',
   statAdmins: 'Admins',
   statLectures: 'Lectures',
+  statCourses: 'Courses',
   statEnrollments: 'Enrollments',
   statSemesters: 'Semesters',
   statCalendarAdoption: 'Calendar sync adoption',
   statTopCourses: 'Most enrolled',
   statNoData: 'No data yet.',
+
+  // Admin — courses
+  adminCoursesIntro:
+    'What the department teaches. A course is added here once and keeps its code, lecturer and subject across every term; the timetable import matches courses by name and never creates one.',
+  adminAddCourse: 'Add course',
+  adminEditCourse: 'Edit course',
+  adminNewCourse: 'New course',
+  adminSearchCourses: 'Search courses by code, name, or professor',
+  adminNoCourses: 'No courses match.',
+  adminCourseSaved: 'Course saved',
+  adminCourseDeleted: 'Course deleted',
+  adminCourseLectures: (count: number) =>
+    count === 1 ? '1 lecture' : `${count} lectures`,
+  adminMandatory: 'Mandatory',
+  adminDeleteCourseTitle: 'Delete course?',
+  adminDeleteCourseBody: (name: string, lectures: number) =>
+    lectures > 0
+      ? `${name} will be permanently deleted, along with ${lectures} lecture${lectures === 1 ? '' : 's'} of it. Enrolled students lose those from their schedule and Google Calendar.`
+      : `${name} will be permanently deleted. It has no lectures scheduled.`,
 
   // Admin — lectures
   adminAddLecture: 'Add lecture',
@@ -157,6 +178,9 @@ export const copy = {
   adminImport: 'Import CSV',
   adminSearchLectures: 'Search lectures by code, name, or professor',
   adminNoLectures: 'No lectures match.',
+  adminLectureCourse: 'Course',
+  adminLecturePickCourse: 'Pick a course',
+  adminLectureInherited: 'Inherited from the course. Edit it in the Courses tab.',
   adminLectureSaved: 'Lecture saved',
   adminLectureDeleted: 'Lecture deleted',
   adminDeleteLectureTitle: 'Delete lecture?',
@@ -198,6 +222,8 @@ export const copy = {
   adminImportTitle: 'Import from PDF',
   adminImportIntro:
     'Drop the timetable or the academic calendar PDF. Everything it finds is shown for review before anything is saved.',
+  adminImportTimetableIntro:
+    'Each row below was matched to a course by name. Approve the ones that are right, correct any that are not by picking the course yourself, and skip anything that does not belong. Saving replaces the whole timetable for the chosen semester.',
   adminImportDrop: 'Drop a PDF here, or choose a file',
   adminImportChoose: 'Choose file',
   adminImportReading: 'Reading the PDF',
@@ -209,7 +235,7 @@ export const copy = {
   adminImportReviewLectures: 'Review lectures',
   adminImportReviewEvents: 'Review calendar entries',
   adminImportReviewHint:
-    'Every row is matched against an existing lecture by name, day and time; matched lectures are marked as offered this semester. Nothing here creates a new lecture — add those in the Lectures tab first.',
+    'Nothing here creates a course. A row can only be pointed at a course that already exists — add missing ones in the Courses tab, then import again.',
   adminImportInclude: 'Include',
   adminImportWarnings: 'Needs a look',
   adminImportCommit: 'Save to catalogue',
@@ -228,12 +254,38 @@ export const copy = {
     failed > 0
       ? `Added to semester: ${updated}, ${failed} failed${reason ? ` — ${reason}` : ''}`
       : `Added to semester: ${updated}`,
-  adminImportNothing: 'Nothing is selected to import.',
+  adminImportNothing: 'Nothing is approved to import.',
   adminImportRowInvalid: 'This row cannot be saved yet.',
+
+  // Admin — import, timetable review
+  adminImportApprove: 'Approve',
+  adminImportApproved: 'Approved',
+  adminImportSkipped: 'Skipped',
+  adminImportSkip: 'Skip',
+  adminImportCourse: 'Course',
+  adminImportPickCourse: 'Pick a course',
+  adminImportFromPdf: 'From the PDF',
+  adminImportAutoMatched: 'Matched by name',
+  adminImportChanged: 'Changed by you',
+  adminImportApproveAll: 'Approve all matched',
+  adminImportSkipAll: 'Skip all',
+  adminImportCounts: (approved: number, total: number) =>
+    `${approved} of ${total} approved`,
+  adminImportNeedsCourse: 'Pick a course for this row, or skip it.',
   adminImportNoMatch:
-    'No existing lecture matches this name, day and time — add it in the Lectures tab, then re-import.',
+    'No course has this name. Pick the right one, or add it in the Courses tab and import again.',
   adminImportAmbiguousMatch: (count: number) =>
-    `${count} existing lectures match this name, day and time — rename one so the import can tell them apart.`,
+    `${count} courses share this name — pick the one this row means.`,
+  adminImportReplaceTitle: 'Replace the timetable?',
+  adminImportReplaceBody: (semester: string, existing: number, incoming: number) =>
+    existing > 0
+      ? `${existing} lecture${existing === 1 ? '' : 's'} already scheduled for ${semester} will be replaced by the ${incoming} approved here. Enrolled students get the new times in their Google Calendar.`
+      : `${incoming} lecture${incoming === 1 ? '' : 's'} will be scheduled for ${semester}.`,
+  adminImportReplaceConfirm: 'Replace timetable',
+  adminImportReplaceDone: (deleted: number, created: number, failed: number) =>
+    failed > 0
+      ? `Replaced ${deleted} with ${created}, ${failed} failed`
+      : `Replaced ${deleted} lectures with ${created}`,
 
   // Admin — academic calendar
   adminTabCalendar: 'Calendar',

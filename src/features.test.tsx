@@ -140,7 +140,7 @@ describe('quick-delete from the dashboard popover', () => {
     // Enrol both Προγραμματισμός Συστημάτων sections (the lecture and its lab)
     // up front. They share a course code and both fall on Monday.
     const { getProvider } = await import('./lib/data/provider')
-    const SYSPROG = 'TPT6-PROGRAMMATISMOS-SYSTIMATON'
+    const SYSPROG = 'ΕΠ02'
     const SYSPROG_AM = '00000000-0000-4000-8000-000000000020'
     const SYSPROG_PM = '00000000-0000-4000-8000-000000000022'
     await getProvider().syncSchedule({ to_add: [SYSPROG_AM, SYSPROG_PM], to_remove: [] })
@@ -181,7 +181,7 @@ describe('mark as passed and restore', () => {
     await waitFor(() => container.querySelectorAll('[role="checkbox"]').length > 0)
 
     // Μηχανική Μάθηση is a single-section elective — crisp to assert on.
-    const code = 'TPT6-MICHANIKI-MATHISI'
+    const code = 'ΕΠ34'
     expect(rowExists(code)).toBe(true)
 
     // Open the confirm dialog from the row action, then confirm inside it.
@@ -264,7 +264,7 @@ describe('this week’s changes on the dashboard', () => {
     // …and the block itself is marked rather than removed, so a student
     // scanning Monday sees why the slot is empty.
     const block = gridBlocks().find((b) =>
-      b.getAttribute('aria-label')?.includes('TPT6-PROGRAMMATISMOS-SYSTIMATON'),
+      b.getAttribute('aria-label')?.includes('ΕΠ02'),
     )
     expect(block?.getAttribute('aria-label')).toContain('Cancelled')
   })

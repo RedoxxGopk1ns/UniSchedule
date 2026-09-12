@@ -74,16 +74,43 @@ Postgres on its own; Calendar is a separate switch, documented further down.
 npx supabase init                      # creates config.toml — nothing else works without it
 npx supabase login
 npx supabase link --project-ref <your-ref>
-npx supabase db push                   # applies supabase/migrations/0001_init.sql
+npx supabase db push                   # applies everything in supabase/migrations/
 ```
 
-Then load the catalogue. `seed.sql` writes to `lectures`/`semesters`, which RLS
-makes read-only to clients, so it needs elevated rights: paste it into the
-Supabase SQL Editor, or `psql "$DATABASE_URL" -f supabase/seed.sql`.
+Then load the catalogue. `seed.sql` writes to `courses`/`lectures`/`semesters`,
+which RLS makes read-only to clients, so it needs elevated rights: paste it into
+the Supabase SQL Editor, or `psql "$DATABASE_URL" -f supabase/seed.sql`.
 
-The migration creates `semesters`, `lectures`, `user_schedules`, and
+`0001_init` creates `semesters`, `lectures`, `user_schedules` and
 `user_profiles`, enables RLS on all four, and adds a trigger that creates a
-profile row on sign-up.
+profile row on sign-up. Later migrations add filtering columns, passed courses,
+the admin audit log, per-occurrence overrides, the `0006_courses` split of
+`lectures` into a `courses` table plus the per-term schedule that references it,
+and `0007_course_details` (`semester_number`, `ects`).
+
+#### Updating a database that already holds the old catalogue
+
+`0006` backfills a `courses` row per distinct lecture title it finds, so the
+migration itself is safe to apply to a populated database. Re-seeding afterwards
+is not: those backfilled rows carry generated ids and the old timetable's
+titles, `courses.course_name` is unique, and `seed.sql` upserts on `id` — so a
+title present in both aborts the whole seed with a unique violation. Clear the
+catalogue first:
+
+```bash
+psql "$DATABASE_URL" -f supabase/reset_catalogue.sql   # destroys saved schedules
+psql "$DATABASE_URL" -f supabase/seed.sql
+```
+
+Read the header of `reset_catalogue.sql` before running it — it cascades through
+`lectures` into `user_schedules`, so every student's saved selection goes with
+it, and their Google Calendar events are left orphaned because plain SQL cannot
+call the Calendar API.
+
+If the app shows **"No courses match your search"** on the selection screen with
+`VITE_DATA_SOURCE=supabase`, this is almost always the cause: the migrations are
+not applied, the `courses` embed 404s, and the catalogue fetch fails to an empty
+list. Check the browser console for `PGRST205`.
 
 ### 2. Google sign-in
 
@@ -174,6 +201,35 @@ the redirect, and never again.
 **Recurring events store wall-clock time plus an IANA zone**, not UTC instants.
 A 09:00 lecture must stay at 09:00 after the spring DST change; converting to
 UTC at creation time would shift the whole series by an hour mid-semester.
+
+## Courses vs. lectures
+
+A **course** is what the department teaches — its code, title, lecturer,
+subject, semester and ECTS. It is entered by hand in Admin → Courses and does
+not change from one term to the next.
+
+The seeded course list is the department's own, all 73 courses across the eight
+semesters, taken from
+<https://dit.hua.gr/index.php/el/programmata-spoudon/proptyxiako/mathimata>.
+That page publishes no lecturer, so `professor` carries the name from the
+timetable PDF where the titles match (32 courses) and `Δεν έχει οριστεί`
+otherwise (41) — fill those in from the Courses tab as they are announced.
+
+A **lecture** is one weekly meeting of a course in one term: a day, a time, a
+room. It points at its course and inherits everything else from it, so
+correcting a lecturer's name once updates every lecture of that course.
+
+Importing the weekly timetable PDF (Admin → Import) therefore never creates a
+course. Each row the parser finds is matched to an existing course **by title**,
+and the admin approves the match, picks a different course from the dropdown, or
+skips the row. A course the PDF mentions but the catalogue lacks has to be added
+in the Courses tab first — the import will not invent one.
+
+Saving **replaces** the chosen semester's timetable with the approved rows
+rather than merging into it. A lecture holds only where and when, and the PDF is
+the authority on both, so re-uploading a corrected timetable mid-term is a
+single gesture instead of a diff to review. Because that also rebuilds the
+Google Calendar events of everyone enrolled, it asks for confirmation first.
 
 ## Deliberate deviations from the PRD
 

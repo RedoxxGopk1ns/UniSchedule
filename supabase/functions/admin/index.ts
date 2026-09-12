@@ -28,6 +28,15 @@ import {
 const CALENDAR_API = 'https://www.googleapis.com/calendar/v3/calendars/primary/events'
 const TOKEN_ENDPOINT = 'https://oauth2.googleapis.com/token'
 
+const COURSE_COLUMNS =
+  'id, course_code, course_name, professor, department, color_tag, subject, is_mandatory, study_year, semester_number, ects'
+
+// A lecture with its course folded in, so admin reads return the same flat
+// shape the frontend's `Lecture` type has always had. `!inner` because
+// course_id is NOT NULL — there is no such thing as a lecture without a course.
+const LECTURE_COLUMNS =
+  'id, course_id, room, day_of_week, start_time, end_time, semester, courses!inner(course_code, course_name, professor, department, color_tag, subject, is_mandatory, study_year, semester_number, ects)'
+
 const OVERRIDE_COLUMNS =
   'id, lecture_id, kind, occurrence_date, new_date, new_start_time, new_end_time, new_room, note'
 
@@ -38,20 +47,31 @@ const corsHeaders = {
 
 const DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday']
 
-interface LectureInput {
+interface CourseInput {
   course_code: string
   course_name: string
   professor: string
-  room: string | null
-  day_of_week: string
-  start_time: string
-  end_time: string
-  semester: string
   department: string | null
   color_tag: string | null
   subject: string | null
   is_mandatory: boolean
   study_year: number | null
+  semester_number: number | null
+  ects: number | null
+}
+
+/**
+ * A lecture is scheduling only since migration 0006 — the course fields are
+ * reached through `course_id`. Accepting them here would let a lecture write
+ * drift from its course, which is the bug that migration removes.
+ */
+interface LectureInput {
+  course_id: string
+  room: string | null
+  day_of_week: string
+  start_time: string
+  end_time: string
+  semester: string
 }
 
 interface SemesterInput {
@@ -115,11 +135,53 @@ const GRID_START_MIN = 7 * 60
 const GRID_END_MIN = 23 * 60
 
 /** Returns an error message, or null when the input is valid. */
+function validateCourse(input: Partial<CourseInput>): string | null {
+  const required: (keyof CourseInput)[] = ['course_code', 'course_name', 'professor']
+  for (const key of required) {
+    const v = input[key]
+    if (v === undefined || v === null || String(v).trim() === '') {
+      return `Missing required field: ${key}`
+    }
+  }
+  if (
+    input.study_year !== null &&
+    input.study_year !== undefined &&
+    (!Number.isInteger(input.study_year) ||
+      input.study_year < 1 ||
+      input.study_year > 4)
+  ) {
+    return 'study_year must be between 1 and 4'
+  }
+  if (
+    input.semester_number !== null &&
+    input.semester_number !== undefined &&
+    (!Number.isInteger(input.semester_number) ||
+      input.semester_number < 1 ||
+      input.semester_number > 8)
+  ) {
+    return 'semester_number must be between 1 and 8'
+  }
+  if (
+    input.ects !== null &&
+    input.ects !== undefined &&
+    (!Number.isFinite(input.ects) || input.ects < 0 || input.ects > 30)
+  ) {
+    return 'ects must be between 0 and 30'
+  }
+  return null
+}
+
+/**
+ * A lecture's own fields. Course code, name, professor and year of study are
+ * validated on the course instead (validateCourse) and inherited from it;
+ * whether `course_id` names a real course is answered by the foreign key.
+ *
+ * Mirrors validateLectureInput in src/lib/adminValidation.ts — change one,
+ * change the other.
+ */
 function validateLecture(input: Partial<LectureInput>): string | null {
   const required: (keyof LectureInput)[] = [
-    'course_code',
-    'course_name',
-    'professor',
+    'course_id',
     'day_of_week',
     'start_time',
     'end_time',
@@ -146,15 +208,6 @@ function validateLecture(input: Partial<LectureInput>): string | null {
   }
   if (toMinutes(start) < GRID_START_MIN || toMinutes(end) > GRID_END_MIN) {
     return 'lecture must fall within the 07:00-23:00 timetable'
-  }
-  if (
-    input.study_year !== null &&
-    input.study_year !== undefined &&
-    (!Number.isInteger(input.study_year) ||
-      input.study_year < 1 ||
-      input.study_year > 4)
-  ) {
-    return 'study_year must be between 1 and 4'
   }
   return null
 }
@@ -255,22 +308,95 @@ function validateOverride(input: Partial<OverrideInput>): string | null {
 }
 
 /** Only the known columns — never trust extra keys from the client. */
-function cleanLecture(input: LectureInput): LectureInput {
+function cleanCourse(input: CourseInput): CourseInput {
   return {
     course_code: input.course_code.trim(),
     course_name: input.course_name.trim(),
     professor: input.professor.trim(),
-    room: input.room?.trim() || null,
-    day_of_week: input.day_of_week,
-    start_time: input.start_time,
-    end_time: input.end_time,
-    semester: input.semester,
     department: input.department?.trim() || null,
     color_tag: input.color_tag?.trim() || null,
     subject: input.subject?.trim() || null,
     is_mandatory: Boolean(input.is_mandatory),
     study_year: input.study_year ?? null,
+    semester_number: input.semester_number ?? null,
+    ects: input.ects ?? null,
   }
+}
+
+function cleanLecture(input: LectureInput): LectureInput {
+  return {
+    course_id: input.course_id,
+    room: input.room?.trim() || null,
+    day_of_week: input.day_of_week,
+    start_time: input.start_time,
+    end_time: input.end_time,
+    semester: input.semester,
+  }
+}
+
+/**
+ * Folds the embedded course up onto the lecture, so every admin read returns
+ * the flat shape the frontend expects.
+ */
+// deno-lint-ignore no-explicit-any
+function flattenLecture(row: any) {
+  const { courses, ...lecture } = row
+  return { ...lecture, ...courses }
+}
+
+/**
+ * Validates and inserts a batch of lectures, collecting per-row failures.
+ *
+ * Shared by lecture.bulkImport and lecture.replaceSemester so the two cannot
+ * drift. Row numbers are carried alongside the payload, so a failure is
+ * reported against the line the admin actually saw.
+ */
+async function insertLectures(supabase: Supabase, rows: LectureInput[]) {
+  const errors: { row: number; message: string }[] = []
+  const valid: { row: number; input: LectureInput }[] = []
+  const semesters = new Set<string>()
+  for (let i = 0; i < rows.length; i++) {
+    const err = validateLecture(rows[i])
+    if (err) {
+      errors.push({ row: i + 1, message: err })
+      continue
+    }
+    valid.push({ row: i + 1, input: cleanLecture(rows[i]) })
+    semesters.add(rows[i].semester)
+  }
+  // Reject the whole import if it references an unknown semester.
+  for (const name of semesters) {
+    const exists = await semesterExists(supabase, name)
+    if (!exists) throw new BadRequest(`Unknown semester: ${name}`)
+  }
+
+  let created = 0
+  if (valid.length) {
+    // One statement for the common case. Postgres rejects the whole batch if
+    // any single row violates a constraint, so on failure fall back to per-row
+    // inserts: a bad row must cost only itself, not the other 199.
+    const { data, error } = await supabase
+      .from('lectures')
+      .insert(valid.map((v) => v.input))
+      .select('id')
+    if (!error) {
+      created = data?.length ?? 0
+    } else {
+      for (const { row, input } of valid) {
+        const { error: rowError } = await supabase.from('lectures').insert(input)
+        if (rowError) errors.push({ row, message: rowError.message })
+        else created++
+      }
+    }
+  }
+  errors.sort((a, b) => a.row - b.row)
+  return { created, errors }
+}
+
+/** Rejects a lecture pointing at a course that does not exist. */
+async function assertCourseExists(supabase: Supabase, id: string) {
+  const { data } = await supabase.from('courses').select('id').eq('id', id).maybeSingle()
+  if (!data) throw new BadRequest(`Unknown course: ${id}`)
 }
 
 function cleanAcademicEvent(input: AcademicEventInput): AcademicEventInput {
@@ -404,30 +530,108 @@ async function handle(
   payload: Record<string, unknown>,
 ): Promise<unknown> {
   switch (action) {
+    // ---- Courses ---------------------------------------------------------
+    //
+    // What the department teaches, independent of any term. Hand-maintained:
+    // a timetable import reads this table to resolve a parsed title, and never
+    // writes to it.
+    case 'course.list': {
+      const { data, error } = await supabase
+        .from('courses')
+        .select(COURSE_COLUMNS)
+        .order('course_name')
+      if (error) throw new Error(error.message)
+      return data
+    }
+    case 'course.create': {
+      const input = payload.input as CourseInput
+      const err = validateCourse(input)
+      if (err) throw new BadRequest(err)
+      const { data, error } = await supabase
+        .from('courses')
+        .insert(cleanCourse(input))
+        .select(COURSE_COLUMNS)
+        .single()
+      // course_name is unique — it is what a timetable import matches on.
+      if (error) {
+        if (error.code === '23505') {
+          throw new BadRequest(`A course named ${input.course_name.trim()} already exists.`)
+        }
+        throw new Error(error.message)
+      }
+      await audit(supabase, actor, action, data.id as string, {
+        course_code: input.course_code,
+      })
+      return data
+    }
+    case 'course.update': {
+      const id = payload.id as string
+      const input = payload.input as CourseInput
+      const err = validateCourse(input)
+      if (err) throw new BadRequest(err)
+      const { data, error } = await supabase
+        .from('courses')
+        .update(cleanCourse(input))
+        .eq('id', id)
+        .select(COURSE_COLUMNS)
+        .single()
+      if (error) {
+        if (error.code === '23505') {
+          throw new BadRequest(`A course named ${input.course_name.trim()} already exists.`)
+        }
+        throw new Error(error.message)
+      }
+      // Nothing to propagate: every lecture of this course reads its name and
+      // lecturer through the foreign key, so they are already up to date.
+      await audit(supabase, actor, action, id, { course_code: input.course_code })
+      return data
+    }
+    case 'course.delete': {
+      const id = payload.id as string
+      // `lectures.course_id` cascades, and `user_schedules.lecture_id` cascades
+      // from there, so Calendar events have to be cleaned up first — by the
+      // time the delete returns, the rows holding the event ids are gone.
+      const { data: affected } = await supabase
+        .from('user_schedules')
+        .select('user_id, google_event_id, lectures!inner(course_id)')
+        .eq('lectures.course_id', id)
+      await deleteCalendarEvents(
+        supabase,
+        (affected ?? []) as { user_id: string; google_event_id: string | null }[],
+      )
+      const { error } = await supabase.from('courses').delete().eq('id', id)
+      if (error) throw new Error(error.message)
+      await audit(supabase, actor, action, id, { enrolled: affected?.length ?? 0 })
+      return { ok: true }
+    }
+
     // ---- Lectures --------------------------------------------------------
     case 'lecture.list': {
       const { data, error } = await supabase
         .from('lectures')
-        .select('*')
-        .order('course_code')
+        .select(LECTURE_COLUMNS)
         .order('day_of_week')
         .order('start_time')
       if (error) throw new Error(error.message)
-      return data
+      // deno-lint-ignore no-explicit-any
+      return (data as any[]).map(flattenLecture)
     }
     case 'lecture.create': {
       const input = payload.input as LectureInput
       const err = validateLecture(input)
       if (err) throw new BadRequest(err)
       await assertSemesterExists(supabase, input.semester)
+      await assertCourseExists(supabase, input.course_id)
       const { data, error } = await supabase
         .from('lectures')
         .insert(cleanLecture(input))
-        .select('*')
+        .select(LECTURE_COLUMNS)
         .single()
       if (error) throw new Error(error.message)
-      await audit(supabase, actor, action, data.id as string, { course_code: input.course_code })
-      return data
+      await audit(supabase, actor, action, data.id as string, {
+        course_id: input.course_id,
+      })
+      return flattenLecture(data)
     }
     case 'lecture.update': {
       const id = payload.id as string
@@ -435,15 +639,16 @@ async function handle(
       const err = validateLecture(input)
       if (err) throw new BadRequest(err)
       await assertSemesterExists(supabase, input.semester)
+      await assertCourseExists(supabase, input.course_id)
       const { data, error } = await supabase
         .from('lectures')
         .update(cleanLecture(input))
         .eq('id', id)
-        .select('*')
+        .select(LECTURE_COLUMNS)
         .single()
       if (error) throw new Error(error.message)
-      await audit(supabase, actor, action, id, { course_code: input.course_code })
-      return data
+      await audit(supabase, actor, action, id, { course_id: input.course_id })
+      return flattenLecture(data)
     }
     case 'lecture.delete': {
       const id = payload.id as string
@@ -464,47 +669,55 @@ async function handle(
     }
     case 'lecture.bulkImport': {
       const rows = (payload.rows as LectureInput[]) ?? []
-      const errors: { row: number; message: string }[] = []
-      // Row numbers are carried alongside the payload so a failure can be
-      // reported against the line the admin actually pasted.
-      const valid: { row: number; input: LectureInput }[] = []
-      const semesters = new Set<string>()
-      for (let i = 0; i < rows.length; i++) {
-        const err = validateLecture(rows[i])
-        if (err) {
-          errors.push({ row: i + 1, message: err })
-          continue
-        }
-        valid.push({ row: i + 1, input: cleanLecture(rows[i]) })
-        semesters.add(rows[i].semester)
-      }
-      // Reject the whole import if it references an unknown semester.
-      for (const name of semesters) {
-        const exists = await semesterExists(supabase, name)
-        if (!exists) throw new BadRequest(`Unknown semester: ${name}`)
-      }
-      let created = 0
-      if (valid.length) {
-        // One statement for the common case. Postgres rejects the whole batch
-        // if any single row violates a constraint, so on failure fall back to
-        // per-row inserts: a bad row must cost only itself, not the other 199.
-        const { data, error } = await supabase
-          .from('lectures')
-          .insert(valid.map((v) => v.input))
-          .select('id')
-        if (!error) {
-          created = data?.length ?? 0
-        } else {
-          for (const { row, input } of valid) {
-            const { error: rowError } = await supabase.from('lectures').insert(input)
-            if (rowError) errors.push({ row, message: rowError.message })
-            else created++
-          }
-        }
-      }
-      errors.sort((a, b) => a.row - b.row)
+      const { created, errors } = await insertLectures(supabase, rows)
       await audit(supabase, actor, action, null, { created, failed: errors.length })
       return { created, errors }
+    }
+    case 'lecture.replaceSemester': {
+      // The timetable import's commit: one term's schedule is rebuilt from the
+      // PDF rather than diffed against what is there. A lecture holds only
+      // where and when, both of which the PDF is the authority on, so nothing
+      // is lost by replacing — and the admin's job stays "approve these rows".
+      const semester = payload.semester as string
+      const rows = (payload.rows as LectureInput[]) ?? []
+      await assertSemesterExists(supabase, semester)
+      // Every row must belong to the term being replaced. Without this a
+      // mislabelled row would survive the delete below while its term's real
+      // lectures were removed and not put back.
+      for (const row of rows) {
+        if (row.semester !== semester) {
+          throw new BadRequest(`Row is filed under ${row.semester}, not ${semester}.`)
+        }
+      }
+
+      // Calendar first, for the same reason as lecture.delete: the cascade
+      // takes the user_schedules rows that hold the event ids with it.
+      const { data: affected } = await supabase
+        .from('user_schedules')
+        .select('user_id, google_event_id, lectures!inner(semester)')
+        .eq('lectures.semester', semester)
+      await deleteCalendarEvents(
+        supabase,
+        (affected ?? []) as { user_id: string; google_event_id: string | null }[],
+      )
+
+      const { data: doomed, error: deleteError } = await supabase
+        .from('lectures')
+        .delete()
+        .eq('semester', semester)
+        .select('id')
+      if (deleteError) throw new Error(deleteError.message)
+
+      const { created, errors } = await insertLectures(supabase, rows)
+      const deleted = doomed?.length ?? 0
+      await audit(supabase, actor, action, null, {
+        semester,
+        deleted,
+        created,
+        failed: errors.length,
+        enrolled: affected?.length ?? 0,
+      })
+      return { deleted, created, errors }
     }
 
     // ---- Academic calendar -----------------------------------------------
@@ -766,7 +979,7 @@ async function handle(
       if (!base) throw new BadRequest('User not found')
       const { data: schedule } = await supabase
         .from('user_schedules')
-        .select('id, lecture_id, google_event_id, lecture:lectures(*)')
+        .select(`id, lecture_id, google_event_id, lecture:lectures(${LECTURE_COLUMNS})`)
         .eq('user_id', id)
       const { data: passed } = await supabase
         .from('user_passed_courses')
@@ -774,7 +987,9 @@ async function handle(
         .eq('user_id', id)
       return {
         ...base,
-        schedule: (schedule ?? []).filter((e) => e.lecture),
+        schedule: (schedule ?? [])
+          .filter((e) => e.lecture)
+          .map((e) => ({ ...e, lecture: flattenLecture(e.lecture) })),
         passed_course_codes: (passed ?? []).map((p) => p.course_code),
       }
     }
@@ -889,14 +1104,26 @@ async function publishOverride(
 
   const { data: lecture, error: lectureError } = await supabase
     .from('lectures')
-    .select('*, semesters!inner(start_date, end_date, time_zone)')
+    .select(
+      `${LECTURE_COLUMNS}, semesters!inner(start_date, end_date, time_zone)`,
+    )
     .eq('id', override.lecture_id)
     .single()
   if (lectureError || !lecture) throw new BadRequest('Unknown lecture')
-  const semester = lecture.semesters as {
+  // Both embeds are to-one and arrive as objects, but naming the columns lets
+  // supabase-js infer them as arrays without generated database types — hence
+  // the trip through `unknown`. See the Supabase client note at the top.
+  const semester = lecture.semesters as unknown as {
     start_date: string
     end_date: string
     time_zone: string | null
+  }
+  // Course fields arrive nested under the embed; the summary below reads them
+  // flat, the same way the frontend's Lecture does.
+  const course = flattenLecture(lecture) as {
+    course_code: string
+    course_name: string
+    professor: string
   }
 
   // Every exclusion for this lecture, not just this override's — the series is
@@ -962,10 +1189,10 @@ async function publishOverride(
 
       if (session) {
         const body = {
-          summary: `${lecture.course_code} — ${lecture.course_name}`,
+          summary: `${course.course_code} — ${course.course_name}`,
           description: override.note
-            ? `${override.note}\n\nProfessor: ${lecture.professor}`
-            : `Professor: ${lecture.professor}`,
+            ? `${override.note}\n\nProfessor: ${course.professor}`
+            : `Professor: ${course.professor}`,
           location: session.room ?? undefined,
           start: { dateTime: `${session.date}T${session.start_time}`, timeZone },
           end: { dateTime: `${session.date}T${session.end_time}`, timeZone },
@@ -1069,6 +1296,9 @@ async function stats(supabase: Supabase) {
   const { count: lectureCount } = await supabase
     .from('lectures')
     .select('id', { count: 'exact', head: true })
+  const { count: courseCount } = await supabase
+    .from('courses')
+    .select('id', { count: 'exact', head: true })
   const { count: semesterCount } = await supabase
     .from('semesters')
     .select('name', { count: 'exact', head: true })
@@ -1083,14 +1313,19 @@ async function stats(supabase: Supabase) {
   let topCourses: { lecture_id: string; course_code: string; course_name: string; count: number }[] =
     []
   if (topIds.length) {
+    // course_code and course_name live on `courses` since migration 0006, so
+    // they are reached through the embed rather than selected off the lecture.
     const { data: lectures } = await supabase
       .from('lectures')
-      .select('id, course_code, course_name')
+      .select('id, courses!inner(course_code, course_name)')
       .in(
         'id',
         topIds.map(([id]) => id),
       )
-    const byId = new Map((lectures ?? []).map((l) => [l.id as string, l]))
+    const byId = new Map(
+      // deno-lint-ignore no-explicit-any
+      (lectures ?? []).map((l: any) => [l.id as string, flattenLecture(l)]),
+    )
     topCourses = topIds.map(([id, count]) => ({
       lecture_id: id,
       course_code: (byId.get(id)?.course_code as string) ?? '—',
@@ -1107,6 +1342,7 @@ async function stats(supabase: Supabase) {
       users: users.length,
       admins: users.filter((u) => u.role === 'admin').length,
       lectures: lectureCount ?? 0,
+      courses: courseCount ?? 0,
       enrollments: (schedules ?? []).length,
       semesters: semesterCount ?? 0,
     },

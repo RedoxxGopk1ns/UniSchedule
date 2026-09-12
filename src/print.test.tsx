@@ -17,6 +17,7 @@ let root: Root
 const entry = (start: string, end: string, day: Lecture['day_of_week'] = 'Monday'): ScheduleEntry => {
   const lecture: Lecture = {
     id: `${day}-${start}`,
+    course_id: 'course-1',
     course_code: 'CS100',
     course_name: 'Course',
     professor: 'Prof',

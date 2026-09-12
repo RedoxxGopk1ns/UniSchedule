@@ -46,6 +46,7 @@ export function AdminOverview() {
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
         <StatCard label={copy.statUsers} value={stats.totals.users} />
         <StatCard label={copy.statAdmins} value={stats.totals.admins} />
+        <StatCard label={copy.statCourses} value={stats.totals.courses} />
         <StatCard label={copy.statLectures} value={stats.totals.lectures} />
         <StatCard label={copy.statEnrollments} value={stats.totals.enrollments} />
         <StatCard label={copy.statSemesters} value={stats.totals.semesters} />

@@ -169,7 +169,11 @@ Deno.serve(async (req) => {
     if (diff.to_add?.length) {
       const { data: lectures } = await supabase
         .from('lectures')
-        .select('*, semesters!inner(start_date, end_date, time_zone)')
+        // Course fields live on `courses` since migration 0006; the embed is
+        // spread back onto the row below so the event bodies read them flat.
+        .select(
+          'id, course_id, room, day_of_week, start_time, end_time, semester, courses!inner(course_code, course_name, professor), semesters!inner(start_date, end_date, time_zone)',
+        )
         .in('id', diff.to_add)
 
       // The academic calendar and any per-occurrence changes, fetched once for
@@ -194,9 +198,31 @@ Deno.serve(async (req) => {
           .in('lecture_id', diff.to_add),
       ])
 
-      for (const lecture of lectures ?? []) {
+      for (const row of lectures ?? []) {
+        // Flatten the course embed onto the lecture, matching the shape the
+        // rest of this loop (and the frontend's Lecture type) expects.
+        //
+        // Both embeds are to-one and arrive as objects, but naming the columns
+        // lets supabase-js infer them as arrays without generated database
+        // types — hence the trip through `unknown`.
+        const { courses, semesters, ...rest } = row as unknown as {
+          courses: { course_code: string; course_name: string; professor: string }
+          semesters: { start_date: string; end_date: string; time_zone: string | null }
+          [key: string]: unknown
+        }
+        const lecture = { ...rest, ...courses } as {
+          id: string
+          room: string | null
+          day_of_week: string
+          start_time: string
+          end_time: string
+          semester: string
+          course_code: string
+          course_name: string
+          professor: string
+        }
         try {
-          const sem = lecture.semesters
+          const sem = semesters
           const date = firstOccurrence(sem.start_date, lecture.day_of_week)
           const timeZone = sem.time_zone ?? 'Europe/Athens'
 
