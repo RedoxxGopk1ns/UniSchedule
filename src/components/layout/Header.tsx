@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useAuth } from '../../hooks/useAuth'
-import { SEMESTER } from '../../lib/data/seed'
+import { useCurrentTerm } from '../../hooks/useCurrentTerm'
 import { copy } from '../../lib/copy'
 import { Avatar } from '../ui/Avatar'
 import { Button } from '../ui/Button'
@@ -17,6 +17,7 @@ import { CloseIcon, GoogleMark, LogoMark, MenuIcon } from '../ui/icons'
  */
 export function Header() {
   const { isAuthenticated, isAdmin, user, signIn, signingIn, signOut } = useAuth()
+  const term = useCurrentTerm()
   const navigate = useNavigate()
   const [drawerOpen, setDrawerOpen] = useState(false)
 
@@ -51,9 +52,9 @@ export function Header() {
           </span>
         </Link>
 
-        {isAuthenticated && (
+        {isAuthenticated && term && (
           <div className="hidden md:block">
-            <SemesterPill semester={SEMESTER.name} />
+            <SemesterPill semester={term} />
           </div>
         )}
 
@@ -153,7 +154,7 @@ export function Header() {
               </div>
             </div>
 
-            <SemesterPill semester={SEMESTER.name} />
+            {term && <SemesterPill semester={term} />}
 
             {isAdmin && (
               <Link

@@ -14,9 +14,11 @@ import { withinTerm } from './occurrences'
 import { computeDiff, isEmptyDiff, unsyncedLectureIds, withBackfill } from './diff'
 import { activeFilterCount, applyFilters, bandOf } from './filters'
 import { layoutDay, layoutWeek } from './layout'
+import { pgFilterValue } from './postgrestFilter'
 import {
   SLOT_COUNT,
   countdownLabel,
+  formatEventRange,
   isValidTime,
   isWithinGrid,
   slotOffset,
@@ -122,6 +124,18 @@ describe('time', () => {
     expect(countdownLabel(130)).toBe('In 2 h 10 min')
     expect(countdownLabel(0)).toBe('Starting now')
   })
+
+  it('formats a term entry as a day, a span, or a span across months', () => {
+    expect(formatEventRange('2027-01-06', '2027-01-06')).toBe('6 Jan')
+    expect(formatEventRange('2026-10-19', '2026-10-23')).toBe('19–23 Oct')
+    expect(formatEventRange('2026-06-30', '2026-07-10')).toBe('30 Jun – 10 Jul')
+  })
+
+  it('reads a term entry as a calendar day, whatever the runner timezone', () => {
+    // '2026-10-19' is a date, not an instant. Formatted in local time west of
+    // Greenwich it would print the 18th.
+    expect(formatEventRange('2026-10-19', '2026-10-19')).toBe('19 Oct')
+  })
 })
 
 describe('seed data', () => {
@@ -190,6 +204,26 @@ describe('detectConflicts', () => {
 
 describe('applyFilters', () => {
   const all = LECTURES
+
+  it('scopes to one term, but never hides a course already selected', () => {
+    // CATALOGUE spans the real spring term and the demo one; LECTURES is the
+    // spring half. The picker scopes to the term being taught so a student
+    // cannot enrol in one that has finished — but an enrolment they already
+    // hold in another term has to stay visible, or the counter claims more
+    // courses than the list can show.
+    const spring = applyFilters(CATALOGUE, { semester: SEMESTER.name })
+    expect(spring).toHaveLength(LECTURES.length)
+    expect(spring.every((l) => l.semester === SEMESTER.name)).toBe(true)
+
+    const demo = CATALOGUE.find((l) => l.semester !== SEMESTER.name)!
+    const withPick = applyFilters(
+      CATALOGUE,
+      { semester: SEMESTER.name },
+      { selectedIds: [demo.id] },
+    )
+    expect(withPick).toHaveLength(LECTURES.length + 1)
+    expect(withPick.some((l) => l.id === demo.id)).toBe(true)
+  })
 
   it('returns everything when nothing is constrained', () => {
     expect(applyFilters(all, {})).toHaveLength(all.length)
@@ -487,5 +521,34 @@ describe('time parsing', () => {
     for (const lecture of LECTURES) {
       expect(isWithinGrid(lecture.start_time, lecture.end_time)).toBe(true)
     }
+  })
+})
+
+describe('pgFilterValue', () => {
+  it('quotes the value so punctuation cannot end the disjunct', () => {
+    // Unquoted, this term name closed the disjunct at the comma and PostgREST
+    // answered PGRST100 — which the academic-calendar readers swallow, so the
+    // grid quietly stopped hiding holidays.
+    expect(pgFilterValue('Spring 2026, Part B')).toBe('"Spring 2026, Part B"')
+    expect(pgFilterValue('Spring 2026')).toBe('"Spring 2026"')
+    expect(pgFilterValue('a)b(c')).toBe('"a)b(c"')
+  })
+
+  it('escapes backslashes before quotes, not after', () => {
+    // Built from char codes rather than escape sequences: the point of this
+    // test is exactly the characters that are hard to write literally.
+    const bs = String.fromCharCode(92)
+    const dq = String.fromCharCode(34)
+
+    // One quote in, one escaped quote out.
+    expect(pgFilterValue(dq)).toBe(dq + bs + dq + dq)
+    // One backslash in, one escaped backslash out.
+    expect(pgFilterValue(bs)).toBe(dq + bs + bs + dq)
+    // Backslash then quote: both escape, and the backslash must be doubled
+    // first, or it would escape the escape and end the value early.
+    expect(pgFilterValue(bs + dq)).toBe(dq + bs + bs + bs + dq + dq)
+  })
+  it('leaves ilike wildcards alone', () => {
+    expect(pgFilterValue('%Demo%')).toBe('"%Demo%"')
   })
 })

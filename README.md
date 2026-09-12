@@ -176,9 +176,19 @@ justification, demo video, the privacy + homepage URLs). The app stays usable vi
 OAuth *test users* the entire time review is pending; publishing to Production
 removes the warning for everyone.
 
-`sync-schedule` is the only component that ever holds a Google token. The
-browser never reads `google_access_token` — see `supabaseProvider.ts`, which
-selects columns explicitly and never includes them.
+`sync-schedule` is the only component that ever reads a Google token, and the
+tokens are **write-only from the browser** — enforced by the database, not by
+convention. Migration `0008_protect_google_tokens` drops table-level `select`
+on `user_profiles` for `anon` and `authenticated` and grants it back column by
+column, omitting `google_access_token`, `google_refresh_token` and
+`token_expires_at`. `insert` and `update` deliberately still cover them:
+Supabase hands the refresh token to the page exactly once, right after the
+OAuth redirect, so `captureProviderTokens` has to be able to write it — it just
+can never read it back. The service role bypasses all of this, which is how
+both Edge Functions still work.
+
+Adding a column to `user_profiles` means granting it in a new migration, or it
+will be unreadable by the app. That is the intended direction to fail in.
 
 ### Who writes what
 
@@ -189,7 +199,7 @@ or simply an unconfigured OAuth app — silently discarded the student's whole
 selection. A Calendar failure now downgrades the toast and nothing more
 (`SyncResult.calendar` in `lib/data/types.ts`).
 
-## Two things worth knowing before debugging sync
+## Three things worth knowing before debugging sync
 
 **The refresh token is issued once.** `signInWithOAuth` requests
 `access_type=offline` with `prompt=consent`. Without both, Google returns an
@@ -201,6 +211,26 @@ the redirect, and never again.
 **Recurring events store wall-clock time plus an IANA zone**, not UTC instants.
 A 09:00 lecture must stay at 09:00 after the spring DST change; converting to
 UTC at creation time would shift the whole series by an hour mid-semester.
+
+**Holidays are excluded, not deleted.** Every series carries an `EXDATE` list
+beside its `RRULE`, built by `exdateDays()` in
+`supabase/functions/_shared/recurrence.ts` from the academic calendar entries
+flagged `blocks_teaching`, plus any per-occurrence override. Both Edge Functions
+share that one builder, and `resolveWeek` in `src/lib/occurrences.ts` is its
+client-side twin: the grid and the calendar have to agree about which Mondays
+exist, so the two are changed together. The stamps carry the lecture’s own start
+time and the university’s zone — a date-only `EXDATE` does not cancel a timed
+occurrence.
+
+**A failed Calendar deletion is remembered, not lost.** Unenrolling deletes the
+`user_schedules` row first and the Calendar event second, so an outage cannot
+cost a student their selection — but that order means the row holding
+`google_event_id` is gone before the Calendar call runs. When that call fails,
+`sync-schedule` records the id in `user_calendar_orphans` (migration 0011) and
+retries it at the start of every later sync, dropping it once Calendar confirms
+the event is gone (404 and 410 count). It is the mirror of `withBackfill`, which
+repairs an enrolment whose event was never created. The table is RLS-on with no
+policies, like `admin_audit_log`: service role only.
 
 ## Courses vs. lectures
 
@@ -237,8 +267,6 @@ Google Calendar events of everyone enrolled, it asks for confirmation first.
   remaining lectures client-side from the already-loaded schedule (a handful of
   rows). A function invocation every five minutes per user would buy nothing.
   The five-minute refresh from §18 is still implemented, in `useUpcoming`.
-- **Holiday `EXDATE` handling** (§22) is out of scope for v1. The RRULE
-  construction site in `sync-schedule/index.ts` is commented where it would go.
 - **Multi-section conflicts warn rather than block** (§22). A student may have a
   genuine reason to double-book; the app should not overrule them.
 - **Lecture-edit auto-patch via DB trigger** (§22) is not built — it needs a

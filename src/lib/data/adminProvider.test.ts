@@ -279,20 +279,47 @@ describe('admin semesters', () => {
 
 describe('admin users', () => {
   let firstUserId: string
+  let secondUserId: string
 
   beforeEach(async () => {
     const users = await admin().listUsers()
     firstUserId = users[0]!.id
+    secondUserId = users[1]!.id
   })
 
   it('grants and revokes the admin role', async () => {
+    // Two admins, so revoking one is not the last-admin case below.
     await admin().setUserRole(firstUserId, 'admin')
+    await admin().setUserRole(secondUserId, 'admin')
     let users = await admin().listUsers()
     expect(users.find((u) => u.id === firstUserId)?.role).toBe('admin')
 
     await admin().setUserRole(firstUserId, null)
     users = await admin().listUsers()
     expect(users.find((u) => u.id === firstUserId)?.role).toBeNull()
+    expect(users.find((u) => u.id === secondUserId)?.role).toBe('admin')
+  })
+
+  it('refuses to remove the last admin', async () => {
+    await admin().setUserRole(firstUserId, 'admin')
+
+    // Unrecoverable from inside the app: the Edge Function checks the admin
+    // claim on every call, so with nobody holding it there is no way to grant
+    // it back short of the Supabase dashboard.
+    await expect(admin().setUserRole(firstUserId, null)).rejects.toThrow(
+      'Cannot remove the last admin',
+    )
+    const users = await admin().listUsers()
+    expect(users.find((u) => u.id === firstUserId)?.role).toBe('admin')
+  })
+
+  it('rejects a role that is neither admin nor null', async () => {
+    // The UI can only send the two, but the Edge Function is a public endpoint
+    // and an unrecognised value reads as "not an admin" everywhere while
+    // looking deliberate in the users table.
+    await expect(
+      admin().setUserRole(firstUserId, 'superuser' as never),
+    ).rejects.toThrow("role must be 'admin' or null")
   })
 
   it('revokes stored Google tokens', async () => {

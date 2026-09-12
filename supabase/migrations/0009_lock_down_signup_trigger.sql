@@ -1,0 +1,30 @@
+-- Takes the sign-up trigger function out of the public API surface.
+--
+-- Run with: supabase db push
+--
+-- `handle_new_user()` (migration 0001) is SECURITY DEFINER: it writes a
+-- user_profiles row as the owner when a row lands in auth.users. It was created
+-- with the default EXECUTE grant to PUBLIC, which is what Supabase's database
+-- linter flags (0028/0029, "Public Can Execute SECURITY DEFINER Function"):
+-- a definer-rights function that any caller can name is worth a second look,
+-- because calling it is calling it as the owner.
+--
+-- In this case it is not reachable. PostgREST does not expose trigger
+-- functions, and Postgres refuses to call one directly anyway — verified
+-- against the live project:
+--
+--   POST /rest/v1/rpc/handle_new_user
+--     -> 404 PGRST202 "Could not find the function public.handle_new_user"
+--
+-- So this migration silences a warning rather than closing a hole. It is worth
+-- doing regardless: the grant serves no purpose, an advisor warning nobody can
+-- explain is worse than no warning, and if the function were ever rewritten as
+-- something callable the grant would already be gone.
+--
+-- Revoking EXECUTE does not stop the trigger. Postgres checks privileges on a
+-- trigger function when the trigger is *created*, not each time it fires, and
+-- the function runs as its owner in any case. That is the assumption this
+-- migration rests on, so it was tested rather than assumed: a user created
+-- through the Auth admin API after this ran still gets its user_profiles row.
+
+revoke execute on function public.handle_new_user() from public, anon, authenticated;

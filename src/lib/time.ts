@@ -142,3 +142,22 @@ export function overlaps(
 ): boolean {
   return toMinutes(aStart) < toMinutes(bEnd) && toMinutes(bStart) < toMinutes(aEnd)
 }
+
+/**
+ * '6 Jan', '19–23 Oct', '30 Jun – 10 Jul' — the term panel's date column.
+ *
+ * Parsed as UTC and formatted in UTC on purpose: these are calendar days, not
+ * instants, and `new Date('2026-10-19')` west of Greenwich is the 18th at
+ * teatime. The single-day and same-month forms exist because the column is
+ * narrow and 'Αργία Πρωτομαγιάς' needs the room more than the month does.
+ */
+export function formatEventRange(start: string, end: string): string {
+  const on = (day: string, opts: Intl.DateTimeFormatOptions) =>
+    new Date(`${day}T00:00:00Z`).toLocaleDateString('en-GB', { timeZone: 'UTC', ...opts })
+
+  if (start === end) return on(start, { day: 'numeric', month: 'short' })
+  if (start.slice(0, 7) === end.slice(0, 7)) {
+    return `${on(start, { day: 'numeric' })}–${on(end, { day: 'numeric', month: 'short' })}`
+  }
+  return `${on(start, { day: 'numeric', month: 'short' })} – ${on(end, { day: 'numeric', month: 'short' })}`
+}

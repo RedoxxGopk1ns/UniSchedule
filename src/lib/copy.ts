@@ -44,6 +44,8 @@ export const copy = {
   filterDepartment: 'Department',
   filterDay: 'Day',
   filterSubject: 'Subject',
+  filterTerm: 'Term',
+  filterTermPlural: 'terms',
   filterProfessor: 'Professor',
   filterTime: 'Time of day',
   /** '2 times of day' reads better than the default '2 time of days'. */
@@ -122,6 +124,19 @@ export const copy = {
   occurrenceExtra: 'Extra session',
   occurrenceMovedTo: (day: string, time: string) => `Moved to ${day} ${time}`,
   occurrenceMovedFrom: (day: string) => `Moved from ${day}`,
+
+  // Term calendar panel (§22)
+  termTitle: 'Term calendar',
+  termEmpty: 'Nothing else on the academic calendar this year.',
+  termNow: 'Now',
+  eventKindHoliday: 'Holiday',
+  eventKindBreak: 'Break',
+  eventKindExamPeriod: 'Exam period',
+  eventKindMakeupWeek: 'Make-up week',
+  eventKindTeachingStart: 'Teaching starts',
+  eventKindTeachingEnd: 'Teaching ends',
+  eventKindPresentations: 'Presentations',
+  eventKindOther: 'Academic calendar',
 
   // Weeks outside the semester's teaching period (§22)
   outOfTermTitle: 'No lectures this week.',

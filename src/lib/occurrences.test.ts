@@ -7,11 +7,13 @@ import type {
   Semester,
 } from './data/types'
 import {
+  activeSemester,
   isOutOfTerm,
   isTeachingBlocked,
   occurrencesToEntries,
   resolveWeek,
   startOfWeek,
+  upcomingTermEvents,
   weekChanges,
   weekDates,
   withinTerm,
@@ -380,5 +382,77 @@ describe('occurrencesToEntries', () => {
     expect(resolved!.lecture.room).toBe('Αμφιθέατρο')
     // The underlying catalogue row is untouched.
     expect(lecture.room).toBe('Αίθουσα 2.3')
+  })
+})
+
+describe('upcomingTermEvents', () => {
+  const easter: AcademicEvent = {
+    id: 'evt-easter',
+    semester: 'Spring 2026',
+    kind: 'break',
+    title: 'Διακοπές Πάσχα',
+    start_date: '2026-04-06',
+    end_date: '2026-04-17',
+    blocks_teaching: true,
+  }
+
+  it('drops what has already finished and keeps what has not', () => {
+    const out = upcomingTermEvents([easter, holiday, makeupWeek], new Date('2026-06-02T09:00:00'))
+    expect(out.map((e) => e.event.id)).toEqual(['evt-makeup'])
+  })
+
+  it('keeps a range that is running today, and marks it current', () => {
+    // Day 3 of a twelve-day break: it has started, so it must not vanish.
+    const out = upcomingTermEvents([easter, holiday], new Date('2026-04-08T09:00:00'))
+    expect(out.map((e) => e.event.id)).toEqual(['evt-easter', 'evt-holiday'])
+    expect(out.map((e) => e.current)).toEqual([true, false])
+  })
+
+  it('includes an entry on its own last day and drops it the next', () => {
+    expect(upcomingTermEvents([easter], new Date('2026-04-17T23:00:00'))).toHaveLength(1)
+    expect(upcomingTermEvents([easter], new Date('2026-04-18T01:00:00'))).toHaveLength(0)
+  })
+
+  it('sorts by start date and honours the limit', () => {
+    const out = upcomingTermEvents(
+      [holiday, easter, makeupWeek],
+      new Date('2026-01-01T09:00:00'),
+      2,
+    )
+    expect(out.map((e) => e.event.id)).toEqual(['evt-easter', 'evt-holiday'])
+  })
+
+  it('reads the day from the local calendar, not from UTC', () => {
+    // 00:30 in Athens on the 18th is still the 17th in UTC. Reading the day off
+    // toISOString would keep a break the student has already finished.
+    expect(upcomingTermEvents([easter], new Date(2026, 3, 18, 0, 30))).toHaveLength(0)
+  })
+})
+
+describe('activeSemester', () => {
+  const DEMO: Semester = {
+    name: 'Demo Term',
+    start_date: '2026-06-15',
+    end_date: '2027-06-30',
+  } as Semester
+
+  it('picks the term whose window contains today', () => {
+    expect(activeSemester([SPRING, DEMO], new Date('2026-03-11T09:00:00'))?.name).toBe(
+      'Spring 2026',
+    )
+    expect(activeSemester([SPRING, DEMO], new Date('2026-09-12T09:00:00'))?.name).toBe(
+      'Demo Term',
+    )
+  })
+
+  it('is inclusive of both ends', () => {
+    expect(activeSemester([SPRING], new Date('2026-02-24T09:00:00'))).not.toBeNull()
+    expect(activeSemester([SPRING], new Date('2026-06-05T23:00:00'))).not.toBeNull()
+    expect(activeSemester([SPRING], new Date('2026-06-06T09:00:00'))).toBeNull()
+  })
+
+  it('is null between terms rather than guessing', () => {
+    expect(activeSemester([SPRING], new Date('2026-08-01T09:00:00'))).toBeNull()
+    expect(activeSemester([], new Date('2026-03-11T09:00:00'))).toBeNull()
   })
 })

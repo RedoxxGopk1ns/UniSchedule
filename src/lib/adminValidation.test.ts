@@ -148,6 +148,23 @@ describe('validateSemesterInput', () => {
     )
   })
 
+  it('rejects a start date that is not an ISO day', () => {
+    expect(validateSemesterInput({ ...validSemester, start_date: '24/02/2026' })).toMatch(
+      /start date must be a date/i,
+    )
+  })
+
+  it('rejects a day that does not exist in its month', () => {
+    // Date rolls 31 February forward into March rather than refusing, so a
+    // term would quietly start a week from where it was typed.
+    expect(validateSemesterInput({ ...validSemester, start_date: '2026-02-31' })).toMatch(
+      /start date must be a date/i,
+    )
+    expect(validateSemesterInput({ ...validSemester, end_date: '2026-06-31' })).toMatch(
+      /end date must be a date/i,
+    )
+  })
+
   it('rejects an end date not after the start date', () => {
     expect(validateSemesterInput({ ...validSemester, end_date: '2026-02-24' })).toMatch(
       /after the start/i,
@@ -162,7 +179,7 @@ describe('validateSemesterInput', () => {
   // `end <= start` check waved it through.
   it('rejects an unparseable end date', () => {
     expect(validateSemesterInput({ ...validSemester, end_date: 'not-a-date' })).toMatch(
-      /not a valid date/i,
+      /end date must be a date/i,
     )
   })
 })

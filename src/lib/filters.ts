@@ -78,7 +78,19 @@ export function applyFilters(
     if (!allows(filters.subjects, lecture.subject)) return false
     if (!allows(filters.professors, lecture.professor)) return false
     if (!allows(filters.bands, bandOf(lecture))) return false
-    if (filters.semester && lecture.semester !== filters.semester) return false
+    // The term is a scope, not a filter, and it never hides a course the
+    // student has already picked. Scoping the picker to the term being taught
+    // is what stops them enrolling in one that finished in June, but an
+    // enrolment made in an earlier term is still theirs to see and remove —
+    // hiding it while the counter kept counting it is how "20 courses
+    // selected" ends up above eight checkboxes.
+    if (
+      filters.semester &&
+      lecture.semester !== filters.semester &&
+      !selected.has(lecture.id)
+    ) {
+      return false
+    }
     if (filters.selectedOnly && !selected.has(lecture.id)) return false
 
     if (filters.mandatoryOnly) {

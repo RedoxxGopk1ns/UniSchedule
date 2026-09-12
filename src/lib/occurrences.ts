@@ -296,3 +296,69 @@ export function weekChanges(occurrences: ResolvedOccurrence[]): ResolvedOccurren
 export function isOutOfTerm(occurrences: ResolvedOccurrence[]): boolean {
   return occurrences.length > 0 && occurrences.every((o) => o.status === 'out-of-term')
 }
+
+/** `date` as an ISO day in the viewer's own calendar, not UTC's. */
+export function isoDay(date: Date): string {
+  return iso(new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate())))
+}
+
+/** An academic-calendar entry with its position relative to today. */
+export interface TermEntry {
+  event: AcademicEvent
+  /** True while today falls inside the entry's own range. */
+  current: boolean
+}
+
+/**
+ * The next few academic-calendar entries, for the dashboard's term panel.
+ *
+ * Until now `academic_events` reached a student only when one of them collided
+ * with a lecture in the week on screen — `resolveWeek` turns a blocked day into
+ * a `cancelled` occurrence carrying the holiday's title. That answers "why is
+ * Thursday empty" and nothing else: the exam period, the make-up week and the
+ * Easter break were all invisible until the week they arrived.
+ *
+ * Entries still running today are included, and sort first because their
+ * `start_date` is already past. An entry is dropped only once its `end_date`
+ * has gone by, so a two-week break stays on screen for the whole fortnight
+ * rather than vanishing the morning it begins.
+ *
+ * Dates are compared as ISO strings, like everywhere else in this file — no
+ * Date objects, so no timezone can shift a holiday onto the wrong day.
+ */
+export function upcomingTermEvents(
+  events: AcademicEvent[],
+  reference: Date,
+  limit = 4,
+): TermEntry[] {
+  const today = isoDay(reference)
+  return events
+    .filter((e) => e.end_date >= today)
+    .sort(
+      (a, b) =>
+        a.start_date.localeCompare(b.start_date) || a.end_date.localeCompare(b.end_date),
+    )
+    .slice(0, limit)
+    .map((event) => ({ event, current: event.start_date <= today }))
+}
+
+/**
+ * The semester that is teaching on `reference`, or null when none is.
+ *
+ * The course picker needs this to decide what it is a picker *for*. Listing
+ * every lecture in the database put two terms side by side with nothing on the
+ * row to tell them apart, so a student could enrol in a term that finished in
+ * June and be shown an empty grid for their trouble.
+ *
+ * Read from the semester windows rather than from `is_current`: that flag says
+ * which term the department considers current, which is not the same question
+ * and goes stale the moment a term ends without anyone moving it. When today
+ * falls outside every window the answer is null and the caller shows
+ * everything — an unknown term is not a reason to hide the catalogue.
+ */
+export function activeSemester(semesters: Semester[], reference: Date): Semester | null {
+  const today = isoDay(reference)
+  return (
+    semesters.find((s) => today >= s.start_date && today <= s.end_date) ?? null
+  )
+}

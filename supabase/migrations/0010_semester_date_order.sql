@@ -1,0 +1,31 @@
+-- A term has to end after it starts.
+--
+-- Run with: supabase db push
+--
+-- `academic_events` has carried `check (end_date >= start_date)` since 0005,
+-- but `semesters` — the table whose two dates decide what the grid draws and
+-- where the Google Calendar series stops — had nothing. The only thing standing
+-- between an inverted term and the database was `validateSemester` in the admin
+-- Edge Function, which compared the dates without first checking that the end
+-- one parsed:
+--
+--   new Date('nonsense') <= start   ->   false   ->   accepted
+--
+-- Every comparison against `Invalid Date` is false, so the guard passed exactly
+-- the input it existed to catch. That is fixed in the same commit as this
+-- migration, on both sides of the validation pair, but a rule this cheap to
+-- state belongs in the schema as well: validation is where the admin gets a
+-- readable error, the constraint is what makes the bad row impossible.
+--
+-- The damage an inverted window does is quiet rather than loud. `withinTerm`
+-- is false for every date, so the timetable renders empty with no explanation,
+-- and `buildRecurrence` emits an RRULE whose UNTIL precedes its DTSTART, which
+-- Google accepts and expands to nothing. No error anywhere — just a term whose
+-- lectures never appear.
+--
+-- Strictly greater, matching the validator: a term cannot begin and end on the
+-- same day. Both existing rows satisfy it (Spring 2026: 24/02 to 05/06; Demo
+-- Term: 15/06/2026 to 30/06/2027).
+
+alter table public.semesters
+  add constraint semesters_end_after_start check (end_date > start_date);

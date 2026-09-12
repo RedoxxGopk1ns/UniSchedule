@@ -30,7 +30,7 @@ npx vitest            # watch mode
 
 ### Test layout
 
-`src/lib/logic.test.ts` and `adminValidation.test.ts` are pure-function tests. `render.test.tsx`, `features.test.tsx`, and `admin.test.tsx` mount the real `App` against the mock provider under jsdom, and every one of them needs the same harness — copy it when adding another:
+`src/lib/logic.test.ts` and `adminValidation.test.ts` are pure-function tests. `src/store/scheduleStore.test.ts` sits between the two: jsdom (the mock provider persists to localStorage) but no rendering, so it needs neither the `act` environment flag nor the `matchMedia`/`scrollTo` stubs — just the store and `resetMockState()` resets. `render.test.tsx`, `features.test.tsx`, and `admin.test.tsx` mount the real `App` against the mock provider under jsdom, and every one of them needs the same harness — copy it when adding another:
 
 - `// @vitest-environment jsdom` as the first line;
 - `IS_REACT_ACT_ENVIRONMENT = true`, or `act()` updates never flush to the DOM;
@@ -67,6 +67,8 @@ Enrolment rows are written by the **browser** directly; the `sync-schedule` Edge
 `src/lib/diff.ts` produces the minimal add/remove set, so an unchanged selection costs zero Calendar calls — there is a test asserting exactly this.
 
 The one deliberate exception is the Calendar backfill. An enrolment can exist with a null `google_event_id` (created while sync was off, or a Calendar call that failed), and `computeDiff` would never mention it again because the student did not change it. `supabaseProvider.syncSchedule` therefore re-reads event-less rows and folds them into the payload via `withBackfill`. This lives in the provider, **not** in `computeDiff`, so the "1 added" counts shown to the student stay honest — don't move it.
+
+The reverse repair is `user_calendar_orphans` (migration `0011`). Unenrolling deletes the row before the Calendar event, so a failed deletion loses the only copy of `google_event_id` and the event would haunt the student's calendar forever; `sync-schedule` records the id instead and sweeps it on the next sync. RLS on, no policies, service role only — like `admin_audit_log`.
 
 Recurring events are created as wall-clock time + IANA zone, never UTC instants, so a 09:00 lecture stays at 09:00 across the DST change.
 
@@ -121,4 +123,4 @@ Migrations are sequential in `supabase/migrations/` (`0001_init` schema + RLS + 
 
 ## Deliberate omissions
 
-Documented in README under "Deliberate deviations from the PRD" — no `get-upcoming` function (computed client-side in `useUpcoming`), no holiday `EXDATE` handling, conflicts warn rather than block, no lecture-edit auto-patch trigger. Don't "fix" these without asking.
+Documented in README under "Deliberate deviations from the PRD" — no `get-upcoming` function (computed client-side in `useUpcoming`), conflicts warn rather than block, no lecture-edit auto-patch trigger. Don't "fix" these without asking.

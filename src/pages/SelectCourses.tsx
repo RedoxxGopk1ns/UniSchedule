@@ -21,10 +21,12 @@ import {
   type DayOfWeek,
   type Lecture,
   type LectureFilters,
+  type Semester,
   type TimeBand,
 } from '../lib/data/types'
 import { computeDiff, isEmptyDiff, unsyncedLectureIds } from '../lib/diff'
 import { BAND_LABELS, activeFilterCount, applyFilters } from '../lib/filters'
+import { activeSemester } from '../lib/occurrences'
 import { CALENDAR_SYNC_ENABLED } from '../lib/supabase'
 
 /**
@@ -38,6 +40,7 @@ export function SelectCourses({ mode = 'select' }: { mode?: 'select' | 'edit' })
   const { entries, loading: scheduleLoading, syncing, sync } = useSchedule()
 
   const [lectures, setLectures] = useState<Lecture[]>([])
+  const [semesters, setSemesters] = useState<Semester[]>([])
   const [loading, setLoading] = useState(true)
   const [filters, setFilters] = useState<LectureFilters>({})
   const [studyYear, setStudyYear] = useState<number | null>(null)
@@ -58,11 +61,21 @@ export function SelectCourses({ mode = 'select' }: { mode?: 'select' | 'edit' })
   // instant and does not spend a round trip per keystroke.
   useEffect(() => {
     let cancelled = false
-    void getProvider()
-      .listLectures()
-      .then((data) => {
+    void Promise.all([getProvider().listLectures(), getProvider().listSemesters()])
+      .then(([data, terms]) => {
         if (cancelled) return
         setLectures(data)
+        setSemesters(terms)
+        // Scope the list to the term being taught right now. The catalogue
+        // holds every term the department has ever published, and two of them
+        // side by side with nothing on the row to tell them apart is how a
+        // student ends up enrolled in a term that finished in June. The pill
+        // below can widen it back to all terms; an unknown window (no term is
+        // teaching today) leaves it unscoped rather than hiding everything.
+        setFilters((current) => ({
+          ...current,
+          semester: activeSemester(terms, new Date())?.name ?? null,
+        }))
         setLoading(false)
       })
       .catch(() => {
@@ -151,6 +164,24 @@ export function SelectCourses({ mode = 'select' }: { mode?: 'select' | 'edit' })
       passedCourseCodes: passedCodes,
     })
   }, [lectures, passedLectures, filters, selected, studyYear, passedCodes])
+
+  /**
+   * The catalogue the count is measured against.
+   *
+   * The term is a scope rather than a filter — it decides which catalogue the
+   * student is looking at, so 'showing 16 of 41' has to mean 41 lectures in
+   * this term, not 41 of the 54 rows the fetch happened to return across every
+   * term the department has ever published.
+   */
+  const inScope = useMemo(
+    () =>
+      filters.semester
+        ? lectures.filter(
+            (l) => l.semester === filters.semester || selected.includes(l.id),
+          )
+        : lectures,
+    [lectures, filters.semester, selected],
+  )
 
   const activeCount = activeFilterCount(filters)
 
@@ -342,6 +373,16 @@ export function SelectCourses({ mode = 'select' }: { mode?: 'select' | 'edit' })
               values={filters.days ?? []}
               onChange={(v) => setFilter('days', v as DayOfWeek[])}
             />
+            {semesters.length > 1 && (
+              <FilterPill
+                single
+                label={copy.filterTerm}
+                plural={copy.filterTermPlural}
+                options={semesters.map((t) => t.name)}
+                values={filters.semester ? [filters.semester] : []}
+                onChange={(v) => setFilter('semester', v[0] ?? null)}
+              />
+            )}
             <FilterPill
               label={copy.filterSubject}
               options={distinct.subjects}
@@ -394,11 +435,11 @@ export function SelectCourses({ mode = 'select' }: { mode?: 'select' | 'edit' })
           {activeCount > 0 && (
             <div className="flex items-center gap-3 text-[13px]">
               <span className="text-muted">
-                {copy.showingCount(filtered.length, lectures.length)}
+                {copy.showingCount(filtered.length, inScope.length)}
               </span>
               <button
                 type="button"
-                onClick={() => setFilters({})}
+                onClick={() => setFilters({ semester: filters.semester })}
                 className="font-medium text-ink underline underline-offset-2 hover:text-body"
               >
                 {copy.clearFilters}

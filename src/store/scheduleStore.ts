@@ -27,7 +27,10 @@ export const useScheduleStore = create<ScheduleState>((set, get) => ({
 
   load: async (force = false) => {
     if (get().loading) return
-    if (get().loaded && !force) return
+    // A load that failed still counts as settled — `loaded` is what stops the
+    // UI spinning forever — but it must not count as *done*, or the error is
+    // permanent for the life of the page and the only way back is a refresh.
+    if (get().loaded && !force && !get().error) return
 
     set({ loading: true, error: null })
     try {
@@ -58,5 +61,8 @@ export const useScheduleStore = create<ScheduleState>((set, get) => ({
     }
   },
 
-  reset: () => set({ entries: [], loading: false, loaded: false, error: null }),
+  reset: () =>
+    // `syncing` too: a reset mid-sync otherwise leaves the button spinning
+    // against a store that has forgotten what it was syncing.
+    set({ entries: [], loading: false, loaded: false, syncing: false, error: null }),
 }))

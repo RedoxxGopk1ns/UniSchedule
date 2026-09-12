@@ -1,4 +1,5 @@
 import { withBackfill } from '../diff'
+import { pgFilterValue } from '../postgrestFilter'
 import { CALENDAR_SYNC_ENABLED, GOOGLE_SCOPES, supabase } from '../supabase'
 import { dayName, minutesOfDay, toMinutes } from '../time'
 import { SEMESTER } from './seed'
@@ -249,8 +250,11 @@ export const supabaseProvider: DataProvider = {
       // All three searchable columns moved to `courses`, so the disjunction has
       // to be evaluated against the embedded table. Paired with the `!inner`
       // join above, a row whose course matches nothing drops out entirely.
+      // Quoted: the search box is free text and a comma in it would end the
+      // disjunct rather than the word. See pgFilterValue.
+      const like = pgFilterValue(q)
       query = query.or(
-        `course_code.ilike.${q},course_name.ilike.${q},professor.ilike.${q}`,
+        `course_code.ilike.${like},course_name.ilike.${like},professor.ilike.${like}`,
         { referencedTable: 'courses' },
       )
     }
@@ -273,7 +277,7 @@ export const supabaseProvider: DataProvider = {
     const { data, error } = await supabase()
       .from('academic_events')
       .select(ACADEMIC_EVENT_COLUMNS)
-      .or(`semester.eq.${semester.name},semester.is.null`)
+      .or(`semester.eq.${pgFilterValue(semester.name)},semester.is.null`)
       .order('start_date')
 
     if (error) throw error
@@ -363,19 +367,31 @@ export const supabaseProvider: DataProvider = {
     const { data: auth } = await supabase().auth.getUser()
     if (!auth.user) return
 
-    // RLS scopes the delete to the caller, as it does in syncSchedule.
+    // Scoped explicitly as well as by RLS. The policy is what enforces this —
+    // but a delete whose only user filter lives in a policy is one migration
+    // away from being a delete of everyone's rows, and the id is right here.
     const { error } = await supabase()
       .from('user_passed_courses')
       .delete()
+      .eq('user_id', auth.user.id)
       .eq('course_code', courseCode)
 
     if (error) throw error
   },
 
   async getMySchedule(): Promise<ScheduleEntry[]> {
+    // getSession rather than getUser: this is the dashboard's first request and
+    // getUser costs a round trip to the auth server to revalidate the token.
+    // The filter is defence in depth — RLS is what actually scopes the read, so
+    // a stale session here returns nothing rather than someone else's rows.
+    const { data: session } = await supabase().auth.getSession()
+    const userId = session.session?.user.id
+    if (!userId) return []
+
     const { data, error } = await supabase()
       .from('user_schedules')
       .select(`id, lecture_id, google_event_id, lecture:lectures(${LECTURE_COLUMNS})`)
+      .eq('user_id', userId)
 
     if (error) throw error
 
@@ -443,6 +459,7 @@ export const supabaseProvider: DataProvider = {
       const { error } = await supabase()
         .from('user_schedules')
         .delete()
+        .eq('user_id', user.id)
         .in(
           'lecture_id',
           diff.to_remove.map((x) => x.lecture_id),
@@ -486,6 +503,7 @@ export const supabaseProvider: DataProvider = {
     const { data: unsynced, error: scanError } = await supabase()
       .from('user_schedules')
       .select('lecture_id')
+      .eq('user_id', user.id)
       .is('google_event_id', null)
 
     if (scanError) {

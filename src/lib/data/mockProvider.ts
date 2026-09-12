@@ -130,6 +130,11 @@ export function resetMockCatalogue() {
   adminSemesters = seedSemesters()
   adminEvents = CALENDAR.map((x) => ({ ...x }))
   adminOverrides = []
+  // Users too: granting someone the admin role or revoking their tokens is as
+  // much a mutation of the admin surface as editing a lecture, and a role left
+  // behind changes what the next test is allowed to do — the last-admin guard
+  // in setUserRole counts them.
+  mockUsers = seedUsers()
 }
 
 /**
@@ -195,7 +200,7 @@ function courseError(id: string): string | null {
 }
 
 /** A small user fixture so the admin Users screen renders in mock mode. */
-const mockUsers: AdminUser[] = [
+const USER_FIXTURE: AdminUser[] = [
   {
     id: DEMO_USER.id,
     email: DEMO_USER.email,
@@ -231,6 +236,16 @@ const mockUsers: AdminUser[] = [
     },
   },
 ]
+
+/**
+ * Fresh copies of the fixture. `calendar` is nested and revokeUserTokens
+ * rewrites it, so a shallow copy would let one test blank another’s tokens.
+ */
+function seedUsers(): AdminUser[] {
+  return USER_FIXTURE.map((u) => ({ ...u, calendar: { ...u.calendar } }))
+}
+
+let mockUsers: AdminUser[] = seedUsers()
 
 /**
  * Test/demo hook: flip the demo user's admin flag. Called by tests before
@@ -732,6 +747,18 @@ export const mockProvider: DataProvider = {
 
     async setUserRole(id: string, role: UserRole | null) {
       await delay(120)
+      // Mirrors the guards in supabase/functions/admin/index.ts — the mock is
+      // what the admin tests run against, so a rule only the Edge Function
+      // knows is a rule nothing here can prove.
+      if (role !== null && role !== 'admin') {
+        throw new Error("role must be 'admin' or null")
+      }
+      if (role === null) {
+        const admins = mockUsers.filter((u) => u.role === 'admin')
+        if (admins.length <= 1 && admins.some((u) => u.id === id)) {
+          throw new Error('Cannot remove the last admin')
+        }
+      }
       const i = mockUsers.findIndex((u) => u.id === id)
       if (i >= 0) mockUsers[i] = { ...mockUsers[i]!, role }
     },

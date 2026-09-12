@@ -14,6 +14,7 @@
  *   supabase secrets set GOOGLE_CLIENT_ID=... GOOGLE_CLIENT_SECRET=...
  */
 import { createClient, type SupabaseClient } from 'jsr:@supabase/supabase-js@2'
+import { pgFilterValue } from '../_shared/postgrest.ts'
 import {
   buildRecurrence,
   firstOccurrence,
@@ -51,6 +52,98 @@ interface SyncError {
   message: string
 }
 
+/**
+ * How many times a stuck event id is retried before the sweep gives up on it.
+ *
+ * A calendar that has been revoked, or an id Google will never accept, would
+ * otherwise cost one API call on every sync the student ever does. Ten is
+ * generous for the transient causes this exists for (an expired token, a 5xx)
+ * and finite for the rest.
+ */
+const MAX_ORPHAN_ATTEMPTS = 10
+
+/** How many stuck events one sync will work through. */
+const ORPHAN_SWEEP_LIMIT = 25
+
+/**
+ * Notes a Calendar event whose enrolment row is already deleted, so a later
+ * sync can finish the job. See migration 0011.
+ *
+ * Never throws: this runs inside the removal loop, and failing to record a
+ * failed deletion must not turn into a second failure the student sees.
+ */
+async function rememberOrphan(
+  supabase: Supabase,
+  userId: string,
+  eventId: string,
+  reason: string,
+) {
+  const { error } = await supabase.from('user_calendar_orphans').upsert(
+    {
+      user_id: userId,
+      google_event_id: eventId,
+      last_error: reason,
+      updated_at: new Date().toISOString(),
+    },
+    { onConflict: 'user_id,google_event_id' },
+  )
+  if (error) console.error('[sync-schedule] could not record orphan', error.message)
+}
+
+/**
+ * Retries the Calendar deletions that failed on an earlier sync.
+ *
+ * A 404 or 410 counts as done — the event is not there, which is the outcome
+ * we wanted. Anything else bumps `attempts` and leaves the row for next time,
+ * up to MAX_ORPHAN_ATTEMPTS.
+ */
+async function sweepOrphans(
+  supabase: Supabase,
+  userId: string,
+  auth: { Authorization: string },
+) {
+  const { data: pending, error } = await supabase
+    .from('user_calendar_orphans')
+    .select('id, google_event_id, attempts')
+    .eq('user_id', userId)
+    .lt('attempts', MAX_ORPHAN_ATTEMPTS)
+    .order('attempts')
+    .limit(ORPHAN_SWEEP_LIMIT)
+
+  if (error || !pending?.length) return
+
+  for (const row of pending) {
+    try {
+      const res = await fetch(`${CALENDAR_API}/${row.google_event_id}`, {
+        method: 'DELETE',
+        headers: auth,
+      })
+      if (res.ok || res.status === 404 || res.status === 410) {
+        await supabase.from('user_calendar_orphans').delete().eq('id', row.id)
+      } else {
+        await supabase
+          .from('user_calendar_orphans')
+          .update({
+            attempts: (row.attempts as number) + 1,
+            last_error: `HTTP ${res.status}`,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', row.id)
+      }
+    } catch (e) {
+      // Network-level failure: count the attempt and move on. One unreachable
+      // id must not abort the sweep, let alone the sync behind it.
+      await supabase
+        .from('user_calendar_orphans')
+        .update({
+          attempts: (row.attempts as number) + 1,
+          last_error: e instanceof Error ? e.message.slice(0, 200) : 'unknown',
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', row.id)
+    }
+  }
+}
 /** Naive in-memory rate limit (§17). Per-instance, which is enough here. */
 const lastCall = new Map<string, number>()
 const RATE_LIMIT_MS = 3000
@@ -148,6 +241,15 @@ Deno.serve(async (req) => {
     const accessToken = await ensureAccessToken(supabase, user.id)
     const auth = { Authorization: `Bearer ${accessToken}` }
 
+    // ---- Repair: events left behind by an earlier failed removal ---------
+    //
+    // Swept before this call's own work so that a failure recorded below is
+    // retried on the *next* sync rather than immediately, and so a long
+    // backlog cannot delay the change the student is waiting on. Entirely
+    // best-effort: nothing here reaches `errors`, because none of it is about
+    // what they just did.
+    await sweepOrphans(supabase, user.id, auth)
+
     // ---- Removals -------------------------------------------------------
     for (const item of diff.to_remove ?? []) {
       if (item.google_event_id) {
@@ -158,6 +260,11 @@ Deno.serve(async (req) => {
         // 404/410 mean the user already deleted it in Calendar — not an error.
         if (!res.ok && res.status !== 404 && res.status !== 410) {
           errors.push({ lecture_id: item.lecture_id, message: `Calendar delete failed (${res.status})` })
+          // The user_schedules row that held this id is already gone, so
+          // without a note of it here the event would stay in the student's
+          // calendar forever — computeDiff never mentions a lecture they are
+          // no longer enrolled in. See migration 0011.
+          await rememberOrphan(supabase, user.id, item.google_event_id, `HTTP ${res.status}`)
         }
       }
       // The user_schedules row is already gone: the client deletes it before
@@ -187,7 +294,9 @@ Deno.serve(async (req) => {
               .from('academic_events')
               .select('semester, start_date, end_date, blocks_teaching')
               .or(
-                `semester.in.(${semesterNames.map((n) => `"${n}"`).join(',')}),semester.is.null`,
+                `semester.in.(${semesterNames
+                  .map((n) => pgFilterValue(n))
+                  .join(',')}),semester.is.null`,
               )
           : Promise.resolve({ data: [] }),
         supabase

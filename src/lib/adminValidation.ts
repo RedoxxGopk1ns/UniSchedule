@@ -103,8 +103,11 @@ export function validateSemesterInput(input: Partial<SemesterInput>): string | n
   if (!input.name || input.name.trim() === '') return 'Name is required.'
   if (!input.start_date) return 'Start date is required.'
   if (!input.end_date) return 'End date is required.'
+  // isValidDate, not a bare Date parse: `new Date('2026-02-31')` is not NaN,
+  // it is the 3rd of March. A term silently starting a week from where the
+  // admin typed it is worse than a rejected form.
+  if (!isValidDate(input.start_date)) return 'Start date must be a date, e.g. 2026-02-24.'
   const start = new Date(`${input.start_date}T00:00:00Z`)
-  if (Number.isNaN(start.getTime())) return 'Start date is not a valid date.'
   // Teaching runs Monday to Friday, so the term cannot open at the weekend.
   // It used to have to be a Monday; the real spring term begins on Tuesday
   // 24/02/2026 (the day after Καθαρά Δευτέρα), and sync-schedule's
@@ -114,10 +117,10 @@ export function validateSemesterInput(input: Partial<SemesterInput>): string | n
   if (start.getUTCDay() === 0 || start.getUTCDay() === 6) {
     return 'Start date must be a weekday.'
   }
-  // Same NaN trap as the times above: an unparseable end date compares false
+  // Same trap as the times above: an unparseable end date compares false
   // against everything, so it has to be rejected on its own terms first.
+  if (!isValidDate(input.end_date)) return 'End date must be a date, e.g. 2026-06-05.'
   const end = new Date(`${input.end_date}T00:00:00Z`)
-  if (Number.isNaN(end.getTime())) return 'End date is not a valid date.'
   if (end <= start) {
     return 'End date must be after the start date.'
   }

@@ -152,6 +152,22 @@ describe('authenticated app', () => {
     expect(text).toContain(SYSPROG_NAME)
   })
 
+  it('lists what is coming on the academic calendar beside the grid', async () => {
+    await signIn()
+    await mountAt('/dashboard')
+    await waitFor(() => (container.textContent ?? '').includes('Αργία 25ης Μαρτίου'))
+
+    const text = container.textContent ?? ''
+    // The clock is pinned to 11/03/2026, so the next entries the department
+    // publishes are the 25 March holiday and then the Easter break.
+    expect(text).toContain('Αργία 25ης Μαρτίου')
+    expect(text).toContain('25 Mar')
+    expect(text).toContain('Διακοπές Πάσχα')
+    expect(text).toContain('6–17 Apr')
+    // Entries that have already been and gone are not 'coming'.
+    expect(text).not.toContain('Αργία 28ης Οκτωβρίου')
+  })
+
   it('replaces the grid with a notice once the semester has ended', async () => {
     // After *every* seeded term has closed — the spring one and the demo one
     // alike. The default enrolment deliberately spans both (see
@@ -170,8 +186,10 @@ describe('authenticated app', () => {
     // No blocks, and nothing in the changes banner either.
     expect(container.querySelector('[role="grid"]')).toBeNull()
     expect(text).not.toContain('changes to your schedule this week')
-    // The sidebar stops counting down to a lecture that is not happening.
-    expect(text).toContain('No more classes today.')
+    // The sidebar stops counting down to a lecture that is not happening. It
+    // settles on its own provider call, which need not land in the same tick as
+    // the grid, so wait for it rather than reading the snapshot taken above.
+    await waitFor(() => (container.textContent ?? '').includes('No more classes today.'))
   })
 
   it('draws the demo term on a week the spring term has already closed', async () => {
@@ -188,6 +206,14 @@ describe('authenticated app', () => {
     const text = container.textContent ?? ''
     expect(text).toContain('Demo Course 101 — Introduction')
     expect(text).not.toContain('No lectures this week.')
+    // The header names the term the grid is actually drawing. It used to read
+    // the bundled seed constant, so it said 'Spring 2026' here — three months
+    // after that term closed, above a grid full of demo-term lectures.
+    await waitFor(() => (container.textContent ?? '').includes('Demo Term'))
+    // Nowhere on the page, printable sheet included: the export used to take
+    // the enrolment list whole and print both terms on one weekly timetable.
+    expect(container.textContent).not.toContain('Spring 2026')
+    expect(container.textContent).not.toContain('Προγραμματισμός Συστημάτων')
   })
 
   it('renders a printable schedule alongside the screen shell', async () => {
@@ -273,6 +299,24 @@ describe('authenticated app', () => {
   }
 
   const rowCount = () => container.querySelectorAll('[role="checkbox"]').length
+
+  it('scopes the picker to the term being taught', async () => {
+    await signIn()
+    await mountAt('/select-courses')
+    await waitFor(() => rowCount() > 0)
+
+    const text = container.textContent ?? ''
+    // The clock is pinned to 11/03/2026, inside Spring 2026, so the term pill
+    // reads that term and the demo term's courses are not on offer. Anything
+    // the student already holds there stays visible — DEFAULT_ENROLMENT spans
+    // both terms — which is why this checks an *unselected* demo course.
+    expect(text).toContain('Spring 2026')
+    // 'Group 2' is the one demo lecture DEFAULT_ENROLMENT leaves out, so it is
+    // the only one the scope is free to hide. Its 'Group 1' sibling is enrolled
+    // and stays on screen — that is the exemption working, not a leak.
+    expect(text).not.toContain('Demo Course 107 — Group 2')
+    expect(text).toContain('Demo Course 107 — Group 1')
+  })
 
   it('narrows the catalogue by day and ORs a second day in', async () => {
     await signIn()

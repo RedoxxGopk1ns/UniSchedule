@@ -24,6 +24,7 @@ import {
   type AcademicEventRow,
   type OverrideRow,
 } from '../_shared/recurrence.ts'
+import { pgFilterValue } from '../_shared/postgrest.ts'
 
 const CALENDAR_API = 'https://www.googleapis.com/calendar/v3/calendars/primary/events'
 const TOKEN_ENDPOINT = 'https://oauth2.googleapis.com/token'
@@ -220,8 +221,17 @@ function validateSemester(input: Partial<SemesterInput>): string | null {
   // used to have to be a Monday because sync-schedule's firstOccurrence added a
   // fixed weekday offset; that now walks forward to the lecture's own weekday,
   // and the real spring term starts on Tuesday 24/02/2026.
+  // Both dates go through isValidDate rather than a bare Date parse. The end
+  // date in particular used to be compared without being checked, and an
+  // unparseable one is `Invalid Date`, which compares false against
+  // everything — so `end <= start` was false and the row went through. The
+  // client twin rejected it, which meant the authoritative validator was the
+  // weaker of the two. It also catches '2026-02-31', which Date rolls into
+  // March instead of refusing.
+  if (!isValidDate(input.start_date)) return 'start_date must be a date, e.g. 2026-02-24'
+  if (!isValidDate(input.end_date)) return 'end_date must be a date, e.g. 2026-06-05'
+
   const start = new Date(`${input.start_date}T00:00:00Z`)
-  if (Number.isNaN(start.getTime())) return 'start_date is not a valid date'
   if (start.getUTCDay() === 0 || start.getUTCDay() === 6) {
     return 'start_date must be a weekday'
   }
@@ -729,7 +739,9 @@ async function handle(
       const semester = payload.semester as string | undefined
       // A null semester means the row spans the whole academic year, so it is
       // always in scope.
-      if (semester) query = query.or(`semester.eq.${semester},semester.is.null`)
+      if (semester) {
+        query = query.or(`semester.eq.${pgFilterValue(semester)},semester.is.null`)
+      }
       const { data, error } = await query
       if (error) throw new Error(error.message)
       return data
@@ -995,7 +1007,33 @@ async function handle(
     }
     case 'user.setRole': {
       const id = payload.id as string
-      const role = (payload.role as string | null) ?? null
+      if (!id || String(id).trim() === '') {
+        throw new BadRequest('Missing required field: id')
+      }
+
+      // Two roles exist and nothing checks for a third. An unrecognised value
+      // written into app_metadata reads as "not an admin" everywhere in the
+      // app while looking deliberate in the users table, so a typo would take
+      // someone's access away silently. The UI only ever sends 'admin' or
+      // null; this is for anything that talks to the function directly.
+      const raw = payload.role ?? null
+      if (raw !== null && raw !== 'admin') {
+        throw new BadRequest("role must be 'admin' or null")
+      }
+      const role = raw as 'admin' | null
+
+      // Removing the last admin is unrecoverable from inside the app: this
+      // function checks the admin claim on every call, so with no admin left
+      // there is no way to grant one back. Recovery would mean the Supabase
+      // dashboard or a service-role SQL session. Demoting yourself while
+      // another admin exists is allowed — that is reversible.
+      if (role === null) {
+        const admins = (await listUsers(supabase)).filter((u) => u.role === 'admin')
+        if (admins.length <= 1 && admins.some((u) => u.id === id)) {
+          throw new BadRequest('Cannot remove the last admin')
+        }
+      }
+
       const { error } = await supabase.auth.admin.updateUserById(id, {
         app_metadata: { role },
       })
@@ -1132,7 +1170,7 @@ async function publishOverride(
     supabase
       .from('academic_events')
       .select('start_date, end_date, blocks_teaching')
-      .or(`semester.eq.${lecture.semester},semester.is.null`),
+      .or(`semester.eq.${pgFilterValue(lecture.semester)},semester.is.null`),
     supabase
       .from('lecture_overrides')
       .select('kind, occurrence_date, new_date, new_start_time, new_end_time, new_room')
