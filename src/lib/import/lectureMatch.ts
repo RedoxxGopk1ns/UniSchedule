@@ -1,35 +1,36 @@
-import type { DayOfWeek, Lecture } from '../data/types'
-import { hhmm } from '../time'
+import type { Course } from '../data/types'
 import { foldGreek } from './greek'
 
-export type LectureMatch =
-  | { status: 'matched'; lecture: Lecture }
+export type CourseMatch =
+  | { status: 'matched'; course: Course }
   | { status: 'unmatched' }
-  | { status: 'ambiguous'; candidates: Lecture[] }
+  | { status: 'ambiguous'; candidates: Course[] }
 
 /**
- * Identifies which existing catalogue lecture a parsed PDF row refers to.
+ * Identifies which course a parsed PDF cell is a meeting of.
  *
- * The key is name + day + start time — the same tuple that already tells two
- * sessions of one course (a lecture and its lab) apart in the catalogue.
- * Name alone or name+day alone both collide on real data: a course's lecture
- * and lab share a name, and some courses meet on the same day twice.
+ * The key is the title alone. A course *is* its title as far as the timetable
+ * is concerned: the PDF carries no course codes, and day/time are precisely
+ * what the import is there to change, so matching on them would mean a course
+ * stopped being recognised the moment its slot moved — the one case the whole
+ * feature exists for.
  *
- * Times go through `hhmm` because the two sides arrive in different shapes: the
- * parser emits 'HH:MM' (fromMinutes) while Postgres serialises its `time`
- * columns as 'HH:MM:SS'. Comparing raw strings matches nothing in production
- * and everything against the seed-backed mock, so the normalisation is load
- * bearing rather than cosmetic.
+ * `foldGreek` absorbs the differences that are not differences: accents, case,
+ * and the Latin/Greek homoglyphs ('A' vs 'Α') that the department's own
+ * documents mix freely.
+ *
+ * Titles are unique in `courses`, so 'ambiguous' should not arise in practice.
+ * It is still reported rather than silently resolved: the admin picks from the
+ * dropdown, which is the same gesture every other uncertain row needs.
  */
-export function matchLecture(
-  parsed: { course_name: string; day_of_week: DayOfWeek; start_time: string },
-  catalogue: Lecture[],
-): LectureMatch {
-  const key = (l: { course_name: string; day_of_week: DayOfWeek; start_time: string }) =>
-    `${foldGreek(l.course_name)}|${l.day_of_week}|${hhmm(l.start_time)}`
-  const wanted = key(parsed)
-  const candidates = catalogue.filter((l) => key(l) === wanted)
+export function matchCourse(
+  parsed: { course_name: string },
+  courses: Course[],
+): CourseMatch {
+  const wanted = foldGreek(parsed.course_name)
+  if (wanted === '') return { status: 'unmatched' }
+  const candidates = courses.filter((c) => foldGreek(c.course_name) === wanted)
   if (candidates.length === 0) return { status: 'unmatched' }
   if (candidates.length > 1) return { status: 'ambiguous', candidates }
-  return { status: 'matched', lecture: candidates[0] }
+  return { status: 'matched', course: candidates[0] }
 }

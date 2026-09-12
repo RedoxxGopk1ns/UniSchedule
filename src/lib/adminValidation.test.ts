@@ -1,40 +1,81 @@
 import { describe, expect, it } from 'vitest'
 import {
   validateAcademicEventInput,
+  validateCourseInput,
   validateLectureInput,
   validateOverrideInput,
   validateSemesterInput,
 } from './adminValidation'
 import type {
   AcademicEventInput,
+  CourseInput,
   LectureInput,
   OverrideInput,
   SemesterInput,
 } from './data/types'
 
-const validLecture: LectureInput = {
+const validCourse: CourseInput = {
   course_code: 'CS999',
   course_name: 'Test Course',
   professor: 'Dr. Test',
-  room: 'Room 1',
-  day_of_week: 'Monday',
-  start_time: '09:00',
-  end_time: '10:30',
-  semester: 'Spring 2026',
   department: 'Computer Science',
   color_tag: '#111111',
   subject: 'Systems',
   is_mandatory: false,
   study_year: 3,
+  semester_number: 6,
+  ects: 5,
 }
+
+const validLecture: LectureInput = {
+  course_id: '00000000-0000-4000-8000-000000000001',
+  room: 'Room 1',
+  day_of_week: 'Monday',
+  start_time: '09:00',
+  end_time: '10:30',
+  semester: 'Spring 2026',
+}
+
+describe('validateCourseInput', () => {
+  it('accepts a valid course', () => {
+    expect(validateCourseInput(validCourse)).toBeNull()
+  })
+
+  it('rejects a missing required field', () => {
+    expect(validateCourseInput({ ...validCourse, course_code: '  ' })).toMatch(/course code/i)
+    expect(validateCourseInput({ ...validCourse, course_name: '' })).toMatch(/course name/i)
+    expect(validateCourseInput({ ...validCourse, professor: '   ' })).toMatch(/professor/i)
+  })
+
+  // study_year lives on the course now, so this is where it is checked.
+  it('rejects a study year outside 1-4', () => {
+    expect(validateCourseInput({ ...validCourse, study_year: 5 })).toMatch(/between 1 and 4/i)
+    expect(validateCourseInput({ ...validCourse, study_year: 0 })).toMatch(/between 1 and 4/i)
+  })
+
+  it('allows a null study year', () => {
+    expect(validateCourseInput({ ...validCourse, study_year: null })).toBeNull()
+  })
+
+  it('rejects a study year that is not a whole number', () => {
+    expect(validateCourseInput({ ...validCourse, study_year: Number.NaN })).toMatch(
+      /between 1 and 4/i,
+    )
+    expect(validateCourseInput({ ...validCourse, study_year: 2.5 })).toMatch(
+      /between 1 and 4/i,
+    )
+  })
+})
 
 describe('validateLectureInput', () => {
   it('accepts a valid lecture', () => {
     expect(validateLectureInput(validLecture)).toBeNull()
   })
 
-  it('rejects a missing required field', () => {
-    expect(validateLectureInput({ ...validLecture, course_code: '  ' })).toMatch(/course code/i)
+  // The whole point of the 0006 split: a lecture must name a course rather
+  // than carrying its own copy of the course's fields.
+  it('requires a course', () => {
+    expect(validateLectureInput({ ...validLecture, course_id: '' })).toMatch(/course/i)
   })
 
   it('rejects end time not after start time', () => {
@@ -43,24 +84,6 @@ describe('validateLectureInput', () => {
     )
     expect(validateLectureInput({ ...validLecture, start_time: '10:00', end_time: '10:00' })).toMatch(
       /after start/i,
-    )
-  })
-
-  it('rejects a study year outside 1–4', () => {
-    expect(validateLectureInput({ ...validLecture, study_year: 5 })).toMatch(/between 1 and 4/i)
-    expect(validateLectureInput({ ...validLecture, study_year: 0 })).toMatch(/between 1 and 4/i)
-  })
-
-  it('allows a null study year', () => {
-    expect(validateLectureInput({ ...validLecture, study_year: null })).toBeNull()
-  })
-
-  it('rejects a study year that is not a whole number', () => {
-    expect(validateLectureInput({ ...validLecture, study_year: Number.NaN })).toMatch(
-      /between 1 and 4/i,
-    )
-    expect(validateLectureInput({ ...validLecture, study_year: 2.5 })).toMatch(
-      /between 1 and 4/i,
     )
   })
 

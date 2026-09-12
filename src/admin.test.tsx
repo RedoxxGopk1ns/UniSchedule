@@ -9,12 +9,13 @@ import { useScheduleStore } from './store/scheduleStore'
 import type { ParsedLecture, ParsedSheet } from './lib/import/timetableParser'
 
 /**
- * A parsed timetable row matching the seeded 'TPT6-PROGRAMMATISMOS-SYSTIMATON'
- * lecture (name + day + start time), and one that matches nothing. room/
- * professor/end_time deliberately differ from the real seeded values, so the
- * "does not overwrite the schedule" assertion below actually exercises
- * something — if the import ever started writing those fields back, this
- * would catch it.
+ * A parsed timetable row whose title matches the seeded 'Προγραμματισμός
+ * Συστημάτων' course, and one whose title matches nothing.
+ *
+ * The matched row's day, time, room and professor deliberately differ from the
+ * seeded lecture's. That is the point: matching is on title alone, so a course
+ * whose slot has moved must still resolve — and the new slot is what gets
+ * written. A matcher that consulted day or time would fail to find this row.
  */
 const { fakeSheets, fakeLectures } = vi.hoisted(() => {
   const matched: ParsedLecture = {
@@ -23,15 +24,17 @@ const { fakeSheets, fakeLectures } = vi.hoisted(() => {
     course_name: 'Προγραμματισμός Συστημάτων',
     professor: 'Διαφορετικός Καθηγητής',
     room: 'Διαφορετική Αίθουσα',
-    day_of_week: 'Monday',
-    start_time: '09:00',
-    end_time: '11:00',
+    // The seeded lecture is Monday 09:00-12:00; this has moved to Thursday.
+    day_of_week: 'Thursday',
+    start_time: '16:00',
+    end_time: '18:00',
     semester: 'Spring 2026',
     department: 'Πληροφορικής και Τηλεματικής',
     color_tag: null,
     subject: null,
     is_mandatory: false,
     study_year: null,
+    semester_number: null,
     warnings: [],
     source: { page: 1, semesterNumber: 6 },
   }
@@ -50,6 +53,7 @@ const { fakeSheets, fakeLectures } = vi.hoisted(() => {
     subject: null,
     is_mandatory: false,
     study_year: null,
+    semester_number: null,
     warnings: [],
     source: { page: 1, semesterNumber: null },
   }
@@ -157,6 +161,46 @@ async function openTab(label: string) {
   await settle()
 }
 
+/**
+ * Types into a controlled React input.
+ *
+ * React installs its own value setter on the DOM node and remembers the last
+ * value it wrote, so a plain `el.value = x` is seen as no change and onChange
+ * never fires. Going through the prototype's setter is what makes the event
+ * look like a real keystroke.
+ */
+function setNativeValue(el: HTMLInputElement | HTMLSelectElement, value: string) {
+  // The descriptor is taken from the element's own prototype rather than the
+  // global HTMLInputElement: jsdom's generated setters reject a wrapper from a
+  // different realm, and the test globals are not always the document's.
+  const setter = Object.getOwnPropertyDescriptor(
+    Object.getPrototypeOf(el),
+    'value',
+  )!.set!
+  setter.call(el, value)
+}
+
+function setInputValue(el: HTMLInputElement, value: string) {
+  setNativeValue(el, value)
+  el.dispatchEvent(new Event('input', { bubbles: true }))
+}
+
+/** Same, for a <select>. */
+function setSelectValue(el: HTMLSelectElement, value: string) {
+  setNativeValue(el, value)
+  el.dispatchEvent(new Event('change', { bubbles: true }))
+}
+
+/** Feeds the (stubbed) PDF parser a file, as the FileDrop would. */
+async function dropPdf() {
+  const input = container.querySelector('input[type="file"]') as HTMLInputElement
+  const file = new File(['dummy'], 'timetable.pdf', { type: 'application/pdf' })
+  Object.defineProperty(input, 'files', { value: [file], configurable: true })
+  await act(async () => {
+    input.dispatchEvent(new Event('change', { bubbles: true }))
+  })
+}
+
 async function signIn(admin: boolean) {
   const { getProvider } = await import('./lib/data/provider')
   await getProvider().signInWithGoogle()
@@ -201,7 +245,7 @@ describe('admin dashboard', () => {
     )!
     await act(async () => lecturesTab.click())
     await waitFor(() =>
-      (container.textContent ?? '').includes('TPT6-PROGRAMMATISMOS-SYSTIMATON'),
+      (container.textContent ?? '').includes('Προγραμματισμός Συστημάτων'),
     )
 
     expect(container.textContent).toContain('Add lecture')
@@ -227,7 +271,7 @@ describe('admin dashboard', () => {
     await mountAt('/admin')
     await openTab('Lectures')
     await waitFor(() =>
-      (container.textContent ?? '').includes('TPT6-PROGRAMMATISMOS-SYSTIMATON'),
+      (container.textContent ?? '').includes('Προγραμματισμός Συστημάτων'),
     )
 
     const { getProvider } = await import('./lib/data/provider')
@@ -252,10 +296,12 @@ describe('admin dashboard', () => {
     // The room the lecture actually has is the one selected, not a blank.
     const roomSelect = field('Room').querySelector('select')!
     expect(roomSelect.value).toBe(target.room)
-    // Department must be selectable too, not a dead single-option control.
-    const deptSelect = field('Department').querySelector('select')!
-    expect(deptSelect.value).toBe(target.department)
-    expect(deptSelect.options.length).toBeGreaterThan(1)
+    // The course is picked, never typed, and the one it already has is
+    // selected — the same class of bug as the room, on the field that now
+    // carries the lecture's whole identity.
+    const courseSelect = field('Course').querySelector('select')!
+    expect(courseSelect.value).toBe(target.course_id)
+    expect(courseSelect.options.length).toBeGreaterThan(1)
 
     const save = [...dialog.querySelectorAll('button')].find(
       (b) => b.textContent?.trim() === 'Save',
@@ -269,12 +315,17 @@ describe('admin dashboard', () => {
     expect(after).toHaveLength(before.length)
   })
 
-  it('lets a new lecture be given a department', async () => {
+  /**
+   * A new lecture must be able to name a course, and only an existing one. The
+   * course fields themselves are gone from this form entirely — they belong to
+   * the course, and are edited in the Courses tab.
+   */
+  it('offers only existing courses when adding a lecture', async () => {
     await signIn(true)
     await mountAt('/admin')
     await openTab('Lectures')
     await waitFor(() =>
-      (container.textContent ?? '').includes('TPT6-PROGRAMMATISMOS-SYSTIMATON'),
+      (container.textContent ?? '').includes('Προγραμματισμός Συστημάτων'),
     )
 
     const add = [...container.querySelectorAll('button')].find(
@@ -284,13 +335,54 @@ describe('admin dashboard', () => {
     await waitFor(() => container.querySelector('[role="dialog"]') !== null)
 
     const dialog = container.querySelector('[role="dialog"]')!
-    const deptSelect = [...dialog.querySelectorAll('label')]
-      .find((l) => l.textContent?.includes('Department'))!
-      .querySelector('select')!
-    // Previously this collapsed to a lone blank option, so a department could
-    // never be set on a new lecture — and a null one vanishes from the filter.
-    const selectable = [...deptSelect.options].filter((o) => o.value !== '')
+    const label = (text: string) =>
+      [...dialog.querySelectorAll('label')].find((l) => l.textContent?.includes(text))
+
+    const courseSelect = label('Course')!.querySelector('select')!
+    const selectable = [...courseSelect.options].filter((o) => o.value !== '')
     expect(selectable.length).toBeGreaterThan(0)
+
+    // Nothing about the course is editable from here — a lecture write that
+    // could touch these is exactly what the 0006 split removes.
+    expect(label('Professor')).toBeUndefined()
+    expect(label('Course code')).toBeUndefined()
+    expect(label('Subject')).toBeUndefined()
+  })
+
+  /**
+   * The inheritance the split exists for, end to end through the UI: rename a
+   * course once and every lecture of it reads the new name.
+   */
+  it('propagates a course rename to the lectures table', async () => {
+    await signIn(true)
+    await mountAt('/admin')
+    await openTab('Courses')
+    await waitFor(() => (container.textContent ?? '').includes('Προγραμματισμός Συστημάτων'))
+
+    const rows = [...container.querySelectorAll('tr')]
+    const row = rows.find((r) => r.textContent?.includes('Προγραμματισμός Συστημάτων'))!
+    const edit = [...row.querySelectorAll('button')].find(
+      (b) => b.textContent?.trim() === 'Edit',
+    )!
+    await act(async () => edit.click())
+    await waitFor(() => container.querySelector('[role="dialog"]') !== null)
+
+    const dialog = container.querySelector('[role="dialog"]')!
+    const nameInput = [...dialog.querySelectorAll('label')]
+      .find((l) => l.textContent?.includes('Course name'))!
+      .querySelector('input')!
+    await act(async () => {
+      setInputValue(nameInput, 'Μετονομασμένο Μάθημα')
+    })
+
+    const save = [...dialog.querySelectorAll('button')].find(
+      (b) => b.textContent?.trim() === 'Save',
+    )!
+    await act(async () => save.click())
+    await waitFor(() => (container.textContent ?? '').includes('Course saved'))
+
+    await openTab('Lectures')
+    await waitFor(() => (container.textContent ?? '').includes('Μετονομασμένο Μάθημα'))
   })
 
   it('manages the academic calendar on the Calendar tab', async () => {
@@ -317,7 +409,7 @@ describe('admin dashboard', () => {
     await mountAt('/admin')
     await openTab('Lectures')
     await waitFor(() =>
-      (container.textContent ?? '').includes('TPT6-PROGRAMMATISMOS-SYSTIMATON'),
+      (container.textContent ?? '').includes('Προγραμματισμός Συστημάτων'),
     )
 
     const changes = [...container.querySelectorAll('button')].find(
@@ -358,58 +450,160 @@ describe('admin dashboard', () => {
     expect(container.textContent).toContain('Cancel this session')
   })
 
-  it('matches a timetable import against the catalogue instead of creating rows', async () => {
+  /**
+   * The whole timetable flow: parse, match by title, approve, replace.
+   *
+   * The fixture's matched row has moved to Thursday 16:00 and carries a
+   * different room and lecturer from the seeded Monday lecture. That is what
+   * makes this worth asserting — the row must still resolve to the same
+   * course (title-only matching), the new slot must be written, and the
+   * lecturer must *not* be, because it belongs to the course.
+   */
+  it('matches a timetable import to courses by title and replaces the term', async () => {
     await signIn(true)
     await mountAt('/admin')
     await openTab('Import')
     await waitFor(() => (container.textContent ?? '').includes('Import from PDF'))
 
-    const before = await (await import('./lib/data/provider')).getProvider().admin.listLectures()
-    const original = before.find((l) => l.course_code === 'TPT6-PROGRAMMATISMOS-SYSTIMATON')!
+    const { getProvider } = await import('./lib/data/provider')
+    const before = await getProvider().admin.listLectures()
+    const courses = await getProvider().admin.listCourses()
+    const target = courses.find(
+      (c) => c.course_name === 'Προγραμματισμός Συστημάτων',
+    )!
+    const springBefore = before.filter((l) => l.semester === 'Spring 2026')
+    expect(springBefore.length).toBeGreaterThan(1)
 
-    const input = container.querySelector('input[type="file"]') as HTMLInputElement
-    const file = new File(['dummy'], 'timetable.pdf', { type: 'application/pdf' })
-    Object.defineProperty(input, 'files', { value: [file], configurable: true })
-    await act(async () => {
-      input.dispatchEvent(new Event('change', { bubbles: true }))
-    })
-    await waitFor(() => (container.textContent ?? '').includes('Review lectures'))
+    await dropPdf()
+    // The courses are fetched after the parse, so the review renders before
+    // anything is matched; the count is what says matching has happened.
+    await waitFor(() => (container.textContent ?? '').includes('1 of 2 approved'))
 
-    // The matched row shows what it resolved to and is included by default.
-    await waitFor(() =>
-      (container.textContent ?? '').includes('Matches TPT6-PROGRAMMATISMOS-SYSTIMATON'),
+    // The matched row resolved to the right course and is approved by default.
+    const rowFor = (name: string) =>
+      [...container.querySelectorAll('input[type="checkbox"]')].find(
+        (c) => c.getAttribute('aria-label') === `Approve ${name}`,
+      ) as HTMLInputElement
+    const matched = rowFor('Προγραμματισμός Συστημάτων')
+    expect(matched.checked).toBe(true)
+
+    const courseSelects = [...container.querySelectorAll('select')].filter((el) =>
+      [...el.options].some((o) => o.value === target.id),
     )
-    const matchedCheckbox = container.querySelector(
-      'input[type="checkbox"][aria-label="Include Προγραμματισμός Συστημάτων"]',
-    ) as HTMLInputElement
-    expect(matchedCheckbox.checked).toBe(true)
-    expect(matchedCheckbox.disabled).toBe(false)
+    expect(courseSelects[0]!.value).toBe(target.id)
 
-    // The unmatched row is flagged, unchecked and cannot be included.
-    expect(container.textContent).toContain(
-      'No existing lecture matches this name, day and time',
-    )
-    const unmatchedCheckbox = container.querySelector(
-      'input[type="checkbox"][aria-label="Include Ένα Μάθημα Που Δεν Υπάρχει"]',
-    ) as HTMLInputElement
-    expect(unmatchedCheckbox.checked).toBe(false)
-    expect(unmatchedCheckbox.disabled).toBe(true)
+    // The unmatched row is flagged and left out — nothing was invented for it.
+    expect(container.textContent).toContain('No course has this name')
+    const unmatched = rowFor('Ένα Μάθημα Που Δεν Υπάρχει')
+    expect(unmatched.checked).toBe(false)
+    expect(unmatched.disabled).toBe(true)
+    expect(container.textContent).toContain('1 of 2 approved')
 
+    // Committing replaces the term, behind an explicit confirmation.
     const commit = [...container.querySelectorAll('button')].find(
-      (b) => b.textContent?.trim() === 'Add to semester',
+      (b) => b.textContent?.trim() === 'Save to catalogue',
     )!
     await act(async () => commit.click())
-    await waitFor(() => (container.textContent ?? '').includes('Added to semester: 1'))
+    await waitFor(() => (container.textContent ?? '').includes('Replace the timetable?'))
+    const confirm = [...container.querySelectorAll('button')].find(
+      (b) => b.textContent?.trim() === 'Replace timetable',
+    )!
+    await act(async () => confirm.click())
+    await waitFor(() => (container.textContent ?? '').includes('Replaced'))
 
-    const after = await (await import('./lib/data/provider')).getProvider().admin.listLectures()
-    // No new lecture was created, matched or not.
-    expect(after.length).toBe(before.length)
-    const updated = after.find((l) => l.course_code === 'TPT6-PROGRAMMATISMOS-SYSTIMATON')!
-    expect(updated.semester).toBe('Spring 2026')
-    // The import never overwrites day/time/room/professor — only `semester`.
-    expect(updated.room).toBe(original.room)
-    expect(updated.professor).toBe(original.professor)
-    expect(updated.end_time).toBe(original.end_time)
+    const after = await getProvider().admin.listLectures()
+    const spring = after.filter((l) => l.semester === 'Spring 2026')
+    // The term is exactly what was approved — the rest of it was replaced.
+    expect(spring).toHaveLength(1)
+
+    const written = spring[0]!
+    expect(written.course_id).toBe(target.id)
+    // The PDF's slot and room won.
+    expect(written.day_of_week).toBe('Thursday')
+    expect(written.start_time).toBe('16:00')
+    expect(written.end_time).toBe('18:00')
+    expect(written.room).toBe('Διαφορετική Αίθουσα')
+    // The course's own fields did not: they are inherited, and the PDF's
+    // 'Διαφορετικός Καθηγητής' never reached the database.
+    expect(written.professor).toBe(target.professor)
+    expect(written.course_code).toBe(target.course_code)
+
+    // Other terms are untouched.
+    expect(after.filter((l) => l.semester !== 'Spring 2026')).toHaveLength(
+      before.filter((l) => l.semester !== 'Spring 2026').length,
+    )
+  })
+
+  /**
+   * The admin's override: the matcher proposed nothing for this row, so the
+   * only way it can be imported is by choosing a course by hand — and doing so
+   * is itself the approval.
+   */
+  it('lets the admin point an unmatched row at a course by hand', async () => {
+    await signIn(true)
+    await mountAt('/admin')
+    await openTab('Import')
+    await waitFor(() => (container.textContent ?? '').includes('Import from PDF'))
+
+    const { getProvider } = await import('./lib/data/provider')
+    const courses = await getProvider().admin.listCourses()
+    const chosen = courses.find((c) => c.course_name === 'Πιθανότητες')!
+
+    await dropPdf()
+    await waitFor(() => (container.textContent ?? '').includes('1 of 2 approved'))
+
+    const approveBox = (name: string) =>
+      [...container.querySelectorAll('input[type="checkbox"]')].find(
+        (c) => c.getAttribute('aria-label') === `Approve ${name}`,
+      ) as HTMLInputElement
+    expect(approveBox('Ένα Μάθημα Που Δεν Υπάρχει').checked).toBe(false)
+
+    // The unmatched row's dropdown is the one still sitting on its placeholder.
+    const selects = [...container.querySelectorAll('select')].filter((el) =>
+      [...el.options].some((o) => o.value === chosen.id),
+    )
+    const empty = selects.find((el) => el.value === '')!
+    await act(async () => {
+      setSelectValue(empty, chosen.id)
+    })
+
+    await waitFor(() => (container.textContent ?? '').includes('2 of 2 approved'))
+    expect(approveBox('Ένα Μάθημα Που Δεν Υπάρχει').checked).toBe(true)
+    // Labelled as the admin's decision rather than the matcher's.
+    expect(container.textContent).toContain('Changed by you')
+  })
+
+  /**
+   * The guarantee the admin is being asked to trust: whatever the PDF says, an
+   * import can only ever file rows against courses that already exist.
+   */
+  it('never creates a course from the PDF', async () => {
+    await signIn(true)
+    await mountAt('/admin')
+    await openTab('Import')
+    await waitFor(() => (container.textContent ?? '').includes('Import from PDF'))
+
+    const { getProvider } = await import('./lib/data/provider')
+    const before = await getProvider().admin.listCourses()
+
+    await dropPdf()
+    await waitFor(() => (container.textContent ?? '').includes('1 of 2 approved'))
+
+    const commit = [...container.querySelectorAll('button')].find(
+      (b) => b.textContent?.trim() === 'Save to catalogue',
+    )!
+    await act(async () => commit.click())
+    await waitFor(() => (container.textContent ?? '').includes('Replace the timetable?'))
+    const confirm = [...container.querySelectorAll('button')].find(
+      (b) => b.textContent?.trim() === 'Replace timetable',
+    )!
+    await act(async () => confirm.click())
+    await waitFor(() => (container.textContent ?? '').includes('Replaced'))
+
+    const after = await getProvider().admin.listCourses()
+    expect(after.map((c) => c.id).sort()).toEqual(before.map((c) => c.id).sort())
+    // In particular, the row that matched nothing did not become a course.
+    expect(after.some((c) => c.course_name === 'Ένα Μάθημα Που Δεν Υπάρχει')).toBe(false)
   })
 
   /**

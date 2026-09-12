@@ -3,16 +3,27 @@ import { Header } from '../../components/layout/Header'
 import { cn } from '../../lib/utils'
 import { copy } from '../../lib/copy'
 import { AdminCalendar } from './AdminCalendar'
+import { AdminCourses } from './AdminCourses'
 import { AdminImport } from './AdminImport'
 import { AdminLectures } from './AdminLectures'
 import { AdminOverview } from './AdminOverview'
 import { AdminSemesters } from './AdminSemesters'
 import { AdminUsers } from './AdminUsers'
 
-type Tab = 'overview' | 'lectures' | 'calendar' | 'import' | 'semesters' | 'users'
+type Tab =
+  | 'overview'
+  | 'courses'
+  | 'lectures'
+  | 'calendar'
+  | 'import'
+  | 'semesters'
+  | 'users'
 
 const TABS: { id: Tab; label: string }[] = [
   { id: 'overview', label: copy.adminTabOverview },
+  // Courses before Lectures: a lecture cannot exist without one, so the tab
+  // order matches the order the work has to be done in.
+  { id: 'courses', label: copy.adminTabCourses },
   { id: 'lectures', label: copy.adminTabLectures },
   { id: 'calendar', label: copy.adminTabCalendar },
   { id: 'import', label: copy.adminTabImport },
@@ -64,6 +75,7 @@ export function AdminDashboard() {
 
         <div className="mt-6">
           {tab === 'overview' && <AdminOverview />}
+          {tab === 'courses' && <AdminCourses />}
           {tab === 'lectures' && <AdminLectures />}
           {tab === 'calendar' && <AdminCalendar />}
           {tab === 'import' && <AdminImport />}

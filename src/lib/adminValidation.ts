@@ -1,5 +1,6 @@
 import type {
   AcademicEventInput,
+  CourseInput,
   LectureInput,
   OverrideInput,
   SemesterInput,
@@ -17,11 +18,57 @@ import { GRID_END_TIME, GRID_START_TIME, isValidTime, isWithinGrid, toMinutes } 
  * feedback, not security.
  */
 
-export function validateLectureInput(input: Partial<LectureInput>): string | null {
-  const required: [keyof LectureInput, string][] = [
+export function validateCourseInput(input: Partial<CourseInput>): string | null {
+  const required: [keyof CourseInput, string][] = [
     ['course_code', 'Course code'],
     ['course_name', 'Course name'],
     ['professor', 'Professor'],
+  ]
+  for (const [key, label] of required) {
+    const v = input[key]
+    if (v === undefined || v === null || String(v).trim() === '') {
+      return `${label} is required.`
+    }
+  }
+  const year = input.study_year
+  if (
+    year !== null &&
+    year !== undefined &&
+    (!Number.isInteger(year) || year < 1 || year > 4)
+  ) {
+    return 'Year of study must be between 1 and 4.'
+  }
+  const sem = input.semester_number
+  if (
+    sem !== null &&
+    sem !== undefined &&
+    (!Number.isInteger(sem) || sem < 1 || sem > 8)
+  ) {
+    return 'Semester must be between 1 and 8.'
+  }
+  const ects = input.ects
+  if (
+    ects !== null &&
+    ects !== undefined &&
+    (!Number.isFinite(ects) || ects < 0 || ects > 30)
+  ) {
+    return 'ECTS must be between 0 and 30.'
+  }
+  return null
+}
+
+/**
+ * A lecture's own fields only — the scheduling half.
+ *
+ * Course code, name, professor and year of study are not checked here because
+ * a lecture no longer carries them; they are validated once, on the course
+ * (see validateCourseInput), and inherited. `course_id` is checked for
+ * presence only: whether it names a real course is a question about the
+ * database, which the Edge Function answers with a foreign key.
+ */
+export function validateLectureInput(input: Partial<LectureInput>): string | null {
+  const required: [keyof LectureInput, string][] = [
+    ['course_id', 'Course'],
     ['day_of_week', 'Day'],
     ['start_time', 'Start time'],
     ['end_time', 'End time'],
@@ -48,14 +95,6 @@ export function validateLectureInput(input: Partial<LectureInput>): string | nul
   }
   if (!isWithinGrid(start, end)) {
     return `Lectures must fall within the ${GRID_START_TIME}–${GRID_END_TIME} timetable.`
-  }
-  const year = input.study_year
-  if (
-    year !== null &&
-    year !== undefined &&
-    (!Number.isInteger(year) || year < 1 || year > 4)
-  ) {
-    return 'Year of study must be between 1 and 4.'
   }
   return null
 }

@@ -14,19 +14,24 @@ export const DAYS: DayOfWeek[] = [
   'Friday',
 ]
 
-/** Master table, admin-populated. Students never write to this. */
-export interface Lecture {
+/**
+ * A course — what the department teaches, independent of when.
+ *
+ * Admin-populated by hand and edited only in the Courses tab. A timetable
+ * import never creates one: the PDF says where and when a course meets, it
+ * does not decide that the course exists. Students never write to this.
+ */
+export interface Course {
   id: string
   course_code: string
+  /**
+   * The course title. This is the identity a timetable import matches on, so
+   * it is unique across the table — two courses that genuinely share a title
+   * (a lecture and its lab) are distinguished in the title itself, the way the
+   * department already writes them: 'Προγραμματισμός ΙΙ — Ομάδα 1'.
+   */
   course_name: string
   professor: string
-  room: string | null
-  day_of_week: DayOfWeek
-  /** 'HH:MM' 24-hour, wall-clock local to the university. */
-  start_time: string
-  end_time: string
-  /** The term this lecture runs in, e.g. 'Spring 2026'. */
-  semester: string
   department: string | null
   /** Optional hex used for the lecture block's left stripe. */
   color_tag: string | null
@@ -38,10 +43,95 @@ export interface Lecture {
   /** Required for the degree, rather than an elective. */
   is_mandatory: boolean
   /**
-   * Year of study this lecture belongs to (1–4). Not to be confused with
-   * `semester` above, which is a term name.
+   * Year of study this course belongs to (1–4). Not to be confused with a
+   * lecture's `semester`, which is a term name.
    */
   study_year: number | null
+  /**
+   * Which of the eight programme semesters the course is published under.
+   *
+   * Distinct from `study_year` (= ceil(semester_number / 2), which cannot tell
+   * the 5th semester from the 6th) and from `Lecture.semester` (a term name
+   * like 'Spring 2026'). Null when unknown.
+   */
+  semester_number: number | null
+  /** Credit weight, 5–8 across this programme. Null when unknown. */
+  ects: number | null
+}
+
+/**
+ * One weekly meeting of a course, in one term.
+ *
+ * A lecture owns only the scheduling half — where and when. Everything else
+ * on this interface is *inherited* from `courses` through `course_id`: the
+ * providers join and flatten it on read, so renaming a course or changing its
+ * lecturer shows up on every lecture of that course with nothing to migrate.
+ * That inheritance is why the flat fields below are readonly — write them
+ * through `updateCourse`, never through a lecture.
+ *
+ * This is the shape the whole UI consumes, unchanged from when `lectures` was
+ * a single flat table (migration 0006 split it).
+ */
+export interface Lecture {
+  id: string
+  course_id: string
+  room: string | null
+  day_of_week: DayOfWeek
+  /** 'HH:MM' 24-hour, wall-clock local to the university. */
+  start_time: string
+  end_time: string
+  /** The term this lecture runs in, e.g. 'Spring 2026'. */
+  semester: string
+
+  // --- Inherited from the course. Read-only; see `Course` above. ---
+  readonly course_code: string
+  readonly course_name: string
+  readonly professor: string
+  readonly department: string | null
+  readonly color_tag: string | null
+  readonly subject: string | null
+  readonly is_mandatory: boolean
+  readonly study_year: number | null
+}
+
+/**
+ * A `lectures` row exactly as stored — the scheduling half, before the course
+ * join. What the seed fixture and the providers hold internally; the UI only
+ * ever sees the joined `Lecture`.
+ */
+export interface LectureRow extends LectureInput {
+  id: string
+}
+
+/** The course half of a `Lecture`, as `joinCourse` needs it. */
+export type LectureCourseFields = Pick<
+  Course,
+  | 'course_code'
+  | 'course_name'
+  | 'professor'
+  | 'department'
+  | 'color_tag'
+  | 'subject'
+  | 'is_mandatory'
+  | 'study_year'
+>
+
+/** Copies a course's inherited half onto a lecture's scheduling half. */
+export function joinCourse<T extends { course_id: string }>(
+  lecture: T,
+  course: LectureCourseFields,
+): T & LectureCourseFields {
+  return {
+    ...lecture,
+    course_code: course.course_code,
+    course_name: course.course_name,
+    professor: course.professor,
+    department: course.department,
+    color_tag: course.color_tag,
+    subject: course.subject,
+    is_mandatory: course.is_mandatory,
+    study_year: course.study_year,
+  }
 }
 
 /** A row of user_schedules joined onto its lecture. */
@@ -147,21 +237,37 @@ export interface LectureFilters {
 // src/lib/data/provider.ts (AdminApi) and supabase/functions/admin.
 // ---------------------------------------------------------------------------
 
-/** Create/update payload for a lecture — every catalogue field, no id. */
-export interface LectureInput {
+/** Create/update payload for a course — every inherited field, no id. */
+export interface CourseInput {
   course_code: string
   course_name: string
   professor: string
-  room: string | null
-  day_of_week: DayOfWeek
-  start_time: string
-  end_time: string
-  semester: string
   department: string | null
   color_tag: string | null
   subject: string | null
   is_mandatory: boolean
   study_year: number | null
+  semester_number: number | null
+  ects: number | null
+}
+
+/**
+ * Create/update payload for a lecture — the scheduling half plus which course
+ * it teaches.
+ *
+ * There is deliberately no course_name/professor/subject here. Those live on
+ * `courses` and are inherited (see `Lecture`); accepting them would let a
+ * lecture write drift away from its course, which is the exact bug the 0006
+ * split removes. A timetable import supplies `course_id` by matching the PDF's
+ * title against the course table, never by inventing a course.
+ */
+export interface LectureInput {
+  course_id: string
+  room: string | null
+  day_of_week: DayOfWeek
+  start_time: string
+  end_time: string
+  semester: string
 }
 
 /** Create/update payload for a semester. */
@@ -220,6 +326,9 @@ export interface AdminStats {
   totals: {
     users: number
     admins: number
+    /** Distinct courses taught, across all terms. */
+    courses: number
+    /** Scheduled meetings — several per course for one that meets twice. */
     lectures: number
     enrollments: number
     semesters: number
@@ -236,6 +345,22 @@ export interface AdminStats {
 
 /** Outcome of a bulk lecture import. */
 export interface BulkImportResult {
+  created: number
+  errors: { row: number; message: string }[]
+}
+
+/**
+ * Outcome of replacing one term's timetable wholesale.
+ *
+ * A timetable re-import deletes every lecture in the term and rebuilds it from
+ * the PDF rather than diffing. Nothing is lost by doing so — a lecture holds
+ * only where and when, and the PDF is the authority on both — and it keeps the
+ * admin's job to "approve these rows" instead of "reconcile these rows against
+ * what is already there". `deleted` is reported so the toast can say what the
+ * re-import actually replaced.
+ */
+export interface ReplaceScheduleResult {
+  deleted: number
   created: number
   errors: { row: number; message: string }[]
 }

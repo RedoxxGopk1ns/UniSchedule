@@ -3,7 +3,7 @@ import { CALENDAR_SYNC_ENABLED, GOOGLE_SCOPES, supabase } from '../supabase'
 import { dayName, minutesOfDay, toMinutes } from '../time'
 import { SEMESTER } from './seed'
 import type { DataProvider } from './provider'
-import { DAYS } from './types'
+import { DAYS, joinCourse } from './types'
 import type {
   AcademicEvent,
   AcademicEventInput,
@@ -12,12 +12,17 @@ import type {
   AdminUser,
   AdminUserDetail,
   BulkImportResult,
+  Course,
+  CourseInput,
+  LectureCourseFields,
   LectureFilters,
   Lecture,
   LectureInput,
   LectureOverride,
+  LectureRow,
   OverrideInput,
   OverridePublishResult,
+  ReplaceScheduleResult,
   ScheduleEntry,
   Semester,
   SemesterInput,
@@ -62,8 +67,33 @@ async function adminInvoke<T>(
  * (§17) — the browser cannot see them.
  */
 
+/**
+ * A lecture and the course it teaches, as one PostgREST embed.
+ *
+ * Migration 0006 moved the course fields out of `lectures`, so they arrive
+ * nested under `course` and are flattened by `flattenLecture` into the shape
+ * the rest of the app reads. The embed is a plain foreign-key join on
+ * `lectures.course_id`; doing it on every read is what makes a renamed course
+ * appear on its lectures with nothing to backfill.
+ */
 const LECTURE_COLUMNS =
-  'id, course_code, course_name, professor, room, day_of_week, start_time, end_time, semester, department, color_tag, subject, is_mandatory, study_year'
+  'id, course_id, room, day_of_week, start_time, end_time, semester, course:courses!inner(course_code, course_name, professor, department, color_tag, subject, is_mandatory, study_year, semester_number, ects)'
+
+/** A `lectures` row with its embedded course, before flattening. */
+type EmbeddedLecture = LectureRow & { course: LectureCourseFields | null }
+
+/**
+ * Folds the embedded course up onto the lecture.
+ *
+ * A null `course` cannot happen — `course_id` is NOT NULL with a foreign key —
+ * but PostgREST types the embed as nullable, and a row that somehow lost its
+ * course is dropped rather than rendered with blank fields.
+ */
+function flattenLectures(rows: EmbeddedLecture[] | null): Lecture[] {
+  return (rows ?? []).flatMap(({ course, ...row }) =>
+    course ? [joinCourse(row, course)] : [],
+  )
+}
 
 const ACADEMIC_EVENT_COLUMNS =
   'id, semester, kind, title, start_date, end_date, blocks_teaching'
@@ -204,16 +234,24 @@ export const supabaseProvider: DataProvider = {
     // selection screen fetches the catalogue once and filters in memory (see
     // SelectCourses), so the rest of LectureFilters is applied client-side by
     // applyFilters rather than duplicated as PostgREST predicates here.
+    // `department` and `subject` live on `courses` now, so these push down
+    // through the embed rather than as plain column predicates. `!inner` makes
+    // the join filtering rather than merely decorative — without it PostgREST
+    // returns every lecture and simply nulls the embed that fails the filter.
     if (filters.departments?.length) {
-      query = query.in('department', filters.departments)
+      query = query.in('courses.department', filters.departments)
     }
     if (filters.days?.length) query = query.in('day_of_week', filters.days)
-    if (filters.subjects?.length) query = query.in('subject', filters.subjects)
+    if (filters.subjects?.length) query = query.in('courses.subject', filters.subjects)
     if (filters.semester) query = query.eq('semester', filters.semester)
     if (filters.search?.trim()) {
       const q = `%${filters.search.trim()}%`
+      // All three searchable columns moved to `courses`, so the disjunction has
+      // to be evaluated against the embedded table. Paired with the `!inner`
+      // join above, a row whose course matches nothing drops out entirely.
       query = query.or(
         `course_code.ilike.${q},course_name.ilike.${q},professor.ilike.${q}`,
+        { referencedTable: 'courses' },
       )
     }
 
@@ -221,7 +259,7 @@ export const supabaseProvider: DataProvider = {
     if (error) throw error
 
     // day_of_week orders alphabetically in Postgres, so re-sort by weekday.
-    return (data as unknown as Lecture[]).sort(
+    return flattenLectures(data as unknown as EmbeddedLecture[]).sort(
       (a, b) =>
         DAYS.indexOf(a.day_of_week) - DAYS.indexOf(b.day_of_week) ||
         toMinutes(a.start_time) - toMinutes(b.start_time),
@@ -341,8 +379,13 @@ export const supabaseProvider: DataProvider = {
 
     if (error) throw error
 
-    return (data as unknown as ScheduleEntry[])
-      .filter((e) => Boolean(e.lecture))
+    // Same flattening as listLectures, one level deeper: the embed nests the
+    // course under each entry's lecture.
+    return (data as unknown as { id: string; lecture_id: string; google_event_id: string | null; lecture: EmbeddedLecture | null }[])
+      .flatMap(({ lecture, ...entry }) => {
+        const [flat] = flattenLectures(lecture ? [lecture] : [])
+        return flat ? [{ ...entry, lecture: flat }] : []
+      })
       .sort(sortEntries)
   },
 
@@ -479,6 +522,14 @@ export const supabaseProvider: DataProvider = {
   // Every admin call routes through the admin Edge Function, which re-checks the
   // caller's admin claim and does all writes with the service role.
   admin: {
+    listCourses: () => adminInvoke<Course[]>('course.list'),
+    createCourse: (input: CourseInput) => adminInvoke<Course>('course.create', { input }),
+    updateCourse: (id: string, input: CourseInput) =>
+      adminInvoke<Course>('course.update', { id, input }),
+    deleteCourse: async (id: string) => {
+      await adminInvoke('course.delete', { id })
+    },
+
     listLectures: () => adminInvoke<Lecture[]>('lecture.list'),
     createLecture: (input: LectureInput) => adminInvoke<Lecture>('lecture.create', { input }),
     updateLecture: (id: string, input: LectureInput) =>
@@ -488,6 +539,8 @@ export const supabaseProvider: DataProvider = {
     },
     bulkImportLectures: (rows: LectureInput[]) =>
       adminInvoke<BulkImportResult>('lecture.bulkImport', { rows }),
+    replaceSemesterSchedule: (semester: string, rows: LectureInput[]) =>
+      adminInvoke<ReplaceScheduleResult>('lecture.replaceSemester', { semester, rows }),
 
     listSemesters: () => adminInvoke<AdminSemester[]>('semester.list'),
     createSemester: (input: SemesterInput) => adminInvoke<Semester>('semester.create', { input }),

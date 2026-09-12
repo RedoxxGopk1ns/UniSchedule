@@ -9,7 +9,13 @@ import { useToast } from '../../components/ui/Toast'
 import { validateLectureInput } from '../../lib/adminValidation'
 import { getProvider } from '../../lib/data/provider'
 import { DAYS } from '../../lib/data/types'
-import type { AdminSemester, DayOfWeek, Lecture, LectureInput } from '../../lib/data/types'
+import type {
+  AdminSemester,
+  Course,
+  DayOfWeek,
+  Lecture,
+  LectureInput,
+} from '../../lib/data/types'
 import { matchesSearch } from '../../lib/filters'
 import { copy } from '../../lib/copy'
 import { LectureOverridesModal } from './LectureOverridesModal'
@@ -33,45 +39,37 @@ const CANONICAL_ROOMS = [
   'Αμφιθέατρο 4ου ορόφου',
 ]
 
+/**
+ * A blank lecture. `course_id` starts empty so the picker opens on its
+ * placeholder rather than silently defaulting to whichever course sorts first
+ * — the wrong course saved by accident is worse than a validation error.
+ */
 function blankInput(semester: string): LectureInput {
   return {
-    course_code: '',
-    course_name: '',
-    professor: '',
+    course_id: '',
     room: null,
     day_of_week: 'Monday',
     start_time: '09:00',
     end_time: '10:00',
     semester,
-    department: null,
-    color_tag: null,
-    subject: null,
-    is_mandatory: false,
-    study_year: null,
   }
 }
 
 function toInput(l: Lecture): LectureInput {
   return {
-    course_code: l.course_code,
-    course_name: l.course_name,
-    professor: l.professor,
+    course_id: l.course_id,
     room: l.room,
     day_of_week: l.day_of_week,
     start_time: hhmm(l.start_time),
     end_time: hhmm(l.end_time),
     semester: l.semester,
-    department: l.department,
-    color_tag: l.color_tag,
-    subject: l.subject,
-    is_mandatory: l.is_mandatory,
-    study_year: l.study_year,
   }
 }
 
 export function AdminLectures() {
   const { toast } = useToast()
   const [lectures, setLectures] = useState<Lecture[]>([])
+  const [courses, setCourses] = useState<Course[]>([])
   const [semesters, setSemesters] = useState<AdminSemester[]>([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
@@ -85,11 +83,13 @@ export function AdminLectures() {
   async function load() {
     setLoading(true)
     try {
-      const [lecs, sems] = await Promise.all([
+      const [lecs, cs, sems] = await Promise.all([
         getProvider().admin.listLectures(),
+        getProvider().admin.listCourses(),
         getProvider().admin.listSemesters(),
       ])
       setLectures(lecs)
+      setCourses(cs)
       setSemesters(sems)
     } catch (e) {
       toast(e instanceof Error ? e.message : copy.adminError, 'error')
@@ -114,11 +114,6 @@ export function AdminLectures() {
     () => catalogueOptions(lectures.map((l) => l.room), CANONICAL_ROOMS),
     [lectures],
   )
-  const departmentOptions = useMemo(
-    () => catalogueOptions(lectures.map((l) => l.department)),
-    [lectures],
-  )
-
   const defaultSemester =
     semesters.find((s) => s.is_current)?.name ?? semesters[0]?.name ?? ''
 
@@ -216,8 +211,8 @@ export function AdminLectures() {
           initial={editing.input}
           isEdit={editing.id !== null}
           semesters={semesters}
+          courses={courses}
           roomOptions={roomOptions}
-          departmentOptions={departmentOptions}
           onCancel={() => setEditing(null)}
           onSaved={async (input) => {
             const api = getProvider().admin
@@ -258,6 +253,7 @@ export function AdminLectures() {
 
       {importing && (
         <ImportModal
+          courses={courses}
           onCancel={() => setImporting(false)}
           onDone={async () => {
             setImporting(false)
@@ -275,16 +271,16 @@ function LectureFormModal({
   initial,
   isEdit,
   semesters,
+  courses,
   roomOptions,
-  departmentOptions,
   onCancel,
   onSaved,
 }: {
   initial: LectureInput
   isEdit: boolean
   semesters: AdminSemester[]
+  courses: Course[]
   roomOptions: string[]
-  departmentOptions: string[]
   onCancel: () => void
   onSaved: (input: LectureInput) => Promise<void>
 }) {
@@ -295,6 +291,8 @@ function LectureFormModal({
 
   const set = <K extends keyof LectureInput>(key: K, value: LectureInput[K]) =>
     setForm((f) => ({ ...f, [key]: value }))
+
+  const chosen = courses.find((c) => c.id === form.course_id) ?? null
 
   async function submit() {
     const err = validateLectureInput(form)
@@ -323,21 +321,24 @@ function LectureFormModal({
 
       <div className="max-h-[65vh] space-y-4 overflow-y-auto px-5 py-4">
         <div className="grid gap-4 sm:grid-cols-2">
-          <Input
-            label="Course code"
-            value={form.course_code}
-            onChange={(e) => set('course_code', e.target.value)}
-          />
-          <Input
-            label="Course name"
-            value={form.course_name}
-            onChange={(e) => set('course_name', e.target.value)}
-          />
-          <Input
-            label="Professor"
-            value={form.professor}
-            onChange={(e) => set('professor', e.target.value)}
-          />
+          {/*
+            Which course meets, picked rather than typed. A lecture cannot name
+            a course that does not exist — add it in the Courses tab first — and
+            its code, lecturer and subject are inherited from whatever is chosen
+            here, so there is nothing else about the course to edit.
+          */}
+          <div className="sm:col-span-2">
+            <Select
+              label={copy.adminLectureCourse}
+              value={form.course_id}
+              onChange={(e) => set('course_id', e.target.value)}
+              placeholder={copy.adminLecturePickCourse}
+              options={courses.map((c) => ({
+                value: c.id,
+                label: `${c.course_name} · ${c.course_code}`,
+              }))}
+            />
+          </div>
           <Select
             label="Room"
             value={form.room ?? ''}
@@ -374,46 +375,22 @@ function LectureFormModal({
             value={form.end_time}
             onChange={(e) => set('end_time', e.target.value)}
           />
-          <Select
-            label="Department"
-            value={form.department ?? ''}
-            onChange={(e) => set('department', e.target.value || null)}
-            options={[
-              { value: '', label: '—' },
-              ...catalogueOptions(departmentOptions, [], form.department).map((d) => ({
-                value: d,
-                label: d,
-              })),
-            ]}
-          />
-          <Input
-            label="Subject"
-            value={form.subject ?? ''}
-            onChange={(e) => set('subject', e.target.value || null)}
-          />
-          <Input
-            label="Colour tag"
-            placeholder="#111111"
-            value={form.color_tag ?? ''}
-            onChange={(e) => set('color_tag', e.target.value || null)}
-          />
-          <Select
-            label="Year of study"
-            value={form.study_year === null ? '' : String(form.study_year)}
-            onChange={(e) => set('study_year', e.target.value ? Number(e.target.value) : null)}
-            placeholder="None"
-            options={[1, 2, 3, 4].map((y) => ({ value: String(y), label: `Year ${y}` }))}
-          />
         </div>
 
-        <label className="flex items-center gap-2 text-sm text-body">
-          <input
-            type="checkbox"
-            checked={form.is_mandatory}
-            onChange={(e) => set('is_mandatory', e.target.checked)}
-          />
-          Mandatory course
-        </label>
+        {/* Everything the chosen course brings with it. Shown read-only so the
+            admin can confirm they picked the right one without leaving the
+            form; it is edited in the Courses tab. */}
+        {chosen && (
+          <div className="rounded-card border border-line p-3">
+            <p className="text-sm text-muted">{copy.adminLectureInherited}</p>
+            <p className="mt-1 text-sm text-ink">
+              {chosen.course_code} · {chosen.professor}
+              {chosen.subject ? ` · ${chosen.subject}` : ''}
+              {chosen.study_year === null ? '' : ` · year ${chosen.study_year}`}
+              {chosen.is_mandatory ? ` · ${copy.adminMandatory}` : ''}
+            </p>
+          </div>
+        )}
 
         {error && <p className="text-sm text-danger">{error}</p>}
       </div>
@@ -479,7 +456,15 @@ function DeleteLectureModal({
 
 // --- CSV import ------------------------------------------------------------
 
-function ImportModal({ onCancel, onDone }: { onCancel: () => void; onDone: () => Promise<void> }) {
+function ImportModal({
+  courses,
+  onCancel,
+  onDone,
+}: {
+  courses: Course[]
+  onCancel: () => void
+  onDone: () => Promise<void>
+}) {
   const { toast } = useToast()
   const [text, setText] = useState('')
   const [busy, setBusy] = useState(false)
@@ -487,20 +472,29 @@ function ImportModal({ onCancel, onDone }: { onCancel: () => void; onDone: () =>
 
   async function run() {
     setError(null)
-    let rows
+    let parsed
     try {
-      rows = parseLectureCsv(text)
+      parsed = parseLectureCsv(text, courses)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not parse CSV.')
       return
     }
-    if (rows.length === 0) {
+    // A row naming a course that does not exist is reported rather than
+    // skipped quietly — a CSV cannot create a course any more than a PDF can.
+    if (parsed.unmatched.length) {
+      const names = [...new Set(parsed.unmatched.map((u) => u.course_name))]
+      setError(
+        `No course is named ${names.slice(0, 3).join(', ')}${names.length > 3 ? `, and ${names.length - 3} more` : ''}. Add them in the Courses tab first.`,
+      )
+      return
+    }
+    if (parsed.rows.length === 0) {
       setError('No rows found.')
       return
     }
     setBusy(true)
     try {
-      const result = await getProvider().admin.bulkImportLectures(rows)
+      const result = await getProvider().admin.bulkImportLectures(parsed.rows)
       if (result.errors.length) {
         toast(`Imported ${result.created}, ${result.errors.length} skipped`, 'warning')
       } else {

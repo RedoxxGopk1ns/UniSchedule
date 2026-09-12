@@ -3,6 +3,7 @@ import { WeeklyGrid } from '../../components/schedule/WeeklyGrid'
 import { Button } from '../../components/ui/Button'
 import { FileDrop } from '../../components/ui/FileDrop'
 import { Input } from '../../components/ui/Input'
+import { Modal } from '../../components/ui/Modal'
 import { Select } from '../../components/ui/Select'
 import { useToast } from '../../components/ui/Toast'
 import { validateAcademicEventInput } from '../../lib/adminValidation'
@@ -10,16 +11,17 @@ import { copy } from '../../lib/copy'
 import { getProvider } from '../../lib/data/provider'
 import {
   ACADEMIC_EVENT_KINDS,
-  DAYS,
+  joinCourse,
   type AcademicEventInput,
   type AcademicEventKind,
   type AdminSemester,
+  type Course,
   type DayOfWeek,
-  type Lecture,
+  type LectureInput,
   type ScheduleEntry,
   type SemesterInput,
 } from '../../lib/data/types'
-import { matchLecture, type LectureMatch } from '../../lib/import/lectureMatch'
+import { matchCourse, type CourseMatch } from '../../lib/import/lectureMatch'
 import { parseAcademicCalendar } from '../../lib/import/calendarParser'
 import { extractPages, pageText, type PdfPage } from '../../lib/import/pdfText'
 import { parseTimetable, type ParsedSheet } from '../../lib/import/timetableParser'
@@ -27,14 +29,14 @@ import { foldGreek } from '../../lib/import/greek'
 
 type Kind = 'timetable' | 'calendar'
 
+/** Whether the admin has signed off on a row, and how it got its course. */
+type RowState = 'approved' | 'skipped'
+
 /**
- * A parsed timetable row, reduced to what matching and review need.
- *
- * There is deliberately no course_code / subject / department / study_year
- * here: a timetable import never creates or edits a catalogue entry, so
- * fields the commit never writes have no business being editable.
+ * One timetable cell as parsed. Read-only — it is what the PDF says, and
+ * editing it would only hide a bad parse rather than fix it.
  */
-interface LectureRow {
+interface ParsedRow {
   key: string
   course_name: string
   professor: string
@@ -42,13 +44,26 @@ interface LectureRow {
   day_of_week: DayOfWeek
   start_time: string
   end_time: string
-  include: boolean
   warnings: string[]
   page: number
 }
 
-interface ReviewRow extends LectureRow {
-  match: LectureMatch
+/** What the admin changed about a row, if anything. */
+interface Decision {
+  course_id: string
+  state: RowState
+}
+
+/** A parsed row resolved against the catalogue — what the review renders. */
+interface LectureRow extends ParsedRow {
+  /** The course the matcher proposed, or null when it found none. */
+  matched: Course | null
+  match: CourseMatch
+  /** What the row will be filed under: the admin's choice, else the match. */
+  course_id: string
+  state: RowState
+  /** True when `course_id` is the matcher's own answer, not the admin's. */
+  autoMatched: boolean
 }
 
 interface EventRow extends AcademicEventInput {
@@ -61,17 +76,26 @@ interface EventRow extends AcademicEventInput {
  * Import the department's timetable and academic calendar from the PDFs the
  * university publishes.
  *
- * The PDF is parsed **in the browser** (src/lib/import), reduced to plain
- * rows, reviewed here, and only then sent through the ordinary admin
- * actions. No binary crosses the wire, there is no storage bucket, and the
- * whole flow works against the mock provider with no network at all.
+ * The PDF is parsed **in the browser** (src/lib/import), reduced to plain rows,
+ * reviewed here, and only then sent through the ordinary admin actions. No
+ * binary crosses the wire, there is no storage bucket, and the whole flow works
+ * against the mock provider with no network at all.
  *
- * The timetable PDF never creates a lecture — lectures are added by hand in
- * the Lectures tab. Each row here is matched by name, day and time against
- * the existing catalogue (src/lib/import/lectureMatch.ts); a match gets its
- * `semester` field set to the term being imported, and nothing else about it
- * changes. A row with no match (or more than one) is flagged so the admin
- * notices — the fix lives in the Lectures tab, not on this screen.
+ * ## What a timetable import does
+ *
+ * It re-times courses that already exist. It never creates one — a course is
+ * the stable half of the catalogue (name, code, lecturer) and is added by hand
+ * in the Courses tab. So each parsed cell is matched to a course **by title
+ * alone** (src/lib/import/lectureMatch.ts), and the admin either approves that
+ * match or picks the right course from a dropdown of what already exists. A row
+ * whose course is genuinely missing is skipped, and the fix is to add the
+ * course and import again.
+ *
+ * Committing **replaces** the chosen semester's timetable rather than merging
+ * into it: a lecture holds only where and when, both of which this PDF is the
+ * authority on, so there is nothing in the old rows worth reconciling. That
+ * also makes a re-import after a mid-term change a one-gesture operation
+ * instead of a diff the admin has to read.
  */
 export function AdminImport() {
   const { toast } = useToast()
@@ -80,12 +104,17 @@ export function AdminImport() {
   const [kind, setKind] = useState<Kind | null>(null)
   const [pages, setPages] = useState<PdfPage[] | null>(null)
   const [sheets, setSheets] = useState<ParsedSheet[]>([])
-  const [lectures, setLectures] = useState<LectureRow[]>([])
-  const [existingLectures, setExistingLectures] = useState<Lecture[]>([])
+  const [parsed, setParsed] = useState<ParsedRow[]>([])
+  // Keyed by row key, and deliberately sparse: a row the admin has not touched
+  // has no entry, so it always reflects the current matcher result.
+  const [decisions, setDecisions] = useState<Record<string, Decision>>({})
+  const [courses, setCourses] = useState<Course[]>([])
+  const [existingCount, setExistingCount] = useState(0)
   const [events, setEvents] = useState<EventRow[]>([])
   const [proposed, setProposed] = useState<SemesterInput | null>(null)
   const [semester, setSemester] = useState('')
   const [semesters, setSemesters] = useState<AdminSemester[]>([])
+  const [confirming, setConfirming] = useState(false)
 
   // Every lecture needs a semester, and the timetable PDF never names one. The
   // field is a picker over the terms that exist rather than free text:
@@ -111,20 +140,35 @@ export function AdminImport() {
     }
   }, [])
 
-  // The catalogue to match parsed rows against — fetched whenever a timetable
-  // is being reviewed, so a re-import after editing the catalogue sees it.
+  // The courses to match parsed rows against — fetched whenever a timetable is
+  // being reviewed, so adding a missing course and re-importing picks it up.
   useEffect(() => {
     if (kind !== 'timetable') return
     let alive = true
     void getProvider()
-      .admin.listLectures()
-      .then((ls) => {
-        if (alive) setExistingLectures(ls)
+      .admin.listCourses()
+      .then((cs) => {
+        if (alive) setCourses(cs)
       })
     return () => {
       alive = false
     }
   }, [kind])
+
+  // How many lectures the chosen term already has, so the confirmation can say
+  // what the replace is about to remove.
+  useEffect(() => {
+    if (kind !== 'timetable' || !semester) return
+    let alive = true
+    void getProvider()
+      .admin.listLectures()
+      .then((ls) => {
+        if (alive) setExistingCount(ls.filter((l) => l.semester === semester).length)
+      })
+    return () => {
+      alive = false
+    }
+  }, [kind, semester, saving])
 
   /**
    * Which document this is, from its own wording.
@@ -160,7 +204,8 @@ export function AdminImport() {
   function reset() {
     setKind(null)
     setSheets([])
-    setLectures([])
+    setParsed([])
+    setDecisions({})
     setEvents([])
     setProposed(null)
   }
@@ -170,11 +215,12 @@ export function AdminImport() {
     setKind(which)
     if (which === 'timetable') {
       // The semester name comes from the calendar PDF when that was imported
-      // first; otherwise the admin types it before saving.
+      // first; otherwise the admin picks it before saving.
       const name = proposed?.name ?? semester
       const result = parseTimetable(source, { semester: name })
       setSheets(result.sheets)
-      setLectures(
+      setDecisions({})
+      setParsed(
         result.lectures.map((l) => ({
           key: l.key,
           course_name: l.course_name,
@@ -183,7 +229,6 @@ export function AdminImport() {
           day_of_week: l.day_of_week,
           start_time: l.start_time,
           end_time: l.end_time,
-          include: true,
           warnings: l.warnings,
           page: l.source.page,
         })),
@@ -210,86 +255,134 @@ export function AdminImport() {
     }
   }
 
-  const setLecture = (key: string, patch: Partial<LectureRow>) =>
-    setLectures((rows) => rows.map((r) => (r.key === key ? { ...r, ...patch } : r)))
+  /**
+   * The parsed rows resolved against the catalogue.
+   *
+   * Derived rather than held in state, because the two inputs arrive at
+   * different times: the parse is synchronous, the courses are a fetch. Writing
+   * the match back into state meant re-running whenever `courses` changed
+   * identity — which happened to work, but would have silently discarded the
+   * admin's decisions on any refetch.
+   *
+   * A confident match is approved by default, so the common case — a PDF whose
+   * courses all exist — is one button press. Anything the matcher could not
+   * resolve starts skipped: an unreviewed row must never save itself.
+   */
+  const lectures: LectureRow[] = useMemo(
+    () =>
+      parsed.map((row) => {
+        const match = matchCourse(row, courses)
+        const matched = match.status === 'matched' ? match.course : null
+        const decision = decisions[row.key]
+        const course_id = decision?.course_id ?? matched?.id ?? ''
+        return {
+          ...row,
+          match,
+          matched,
+          course_id,
+          state: decision?.state ?? (matched ? 'approved' : 'skipped'),
+          // Only when the course showing is the matcher's own answer. Anything
+          // else is the admin's choice — including a row the matcher could not
+          // resolve at all, which is the most important case to label as such.
+          autoMatched: matched !== null && course_id === matched.id,
+        }
+      }),
+    [parsed, courses, decisions],
+  )
+
+  const setLecture = (key: string, patch: Decision) =>
+    setDecisions((d) => ({ ...d, [key]: patch }))
 
   const setEvent = (key: string, patch: Partial<EventRow>) =>
     setEvents((rows) => rows.map((r) => (r.key === key ? { ...r, ...patch } : r)))
 
-  // Recomputed on every keystroke: editing a row's name/day/time is how the
-  // admin steers a garbled parse onto the right catalogue lecture. None of
-  // these edits are ever written back — they only change what gets matched.
-  const lectureRows: ReviewRow[] = useMemo(
-    () =>
-      lectures.map((l) => ({
-        ...l,
-        match: matchLecture(
-          { course_name: l.course_name, day_of_week: l.day_of_week, start_time: l.start_time },
-          existingLectures,
-        ),
-      })),
-    [lectures, existingLectures],
-  )
+  const setAll = (state: RowState) =>
+    setDecisions(() =>
+      Object.fromEntries(
+        lectures
+          // "Approve all" can only approve rows that have a course; the rest
+          // still need a decision, and approving them would file them nowhere.
+          .filter((r) => r.course_id !== '' || state === 'skipped')
+          .map((r) => [r.key, { course_id: r.course_id, state }]),
+      ),
+    )
 
-  const chosenLectures = lectureRows.filter(
-    (r): r is ReviewRow & { match: Extract<LectureMatch, { status: 'matched' }> } =>
-      r.include && r.match.status === 'matched',
-  )
+  const approved = lectures.filter((r) => r.state === 'approved' && r.course_id !== '')
   const chosenEvents = events.filter((e) => e.include)
 
-  /** Preview entries for the read-only grid beside the table. */
-  const previewEntries: ScheduleEntry[] = chosenLectures.map((r, i) => ({
-    id: `preview-${i}`,
-    lecture_id: `preview-${i}`,
-    google_event_id: null,
-    lecture: { ...r.match.lecture, semester: semester || r.match.lecture.semester, id: `preview-${i}` },
-  }))
+  const courseById = useMemo(() => new Map(courses.map((c) => [c.id, c])), [courses])
 
-  async function commit() {
+  /** Preview entries for the read-only grid beside the table. */
+  const previewEntries: ScheduleEntry[] = approved.flatMap((r, i) => {
+    const course = courseById.get(r.course_id)
+    if (!course) return []
+    const lecture = joinCourse(
+      {
+        id: `preview-${i}`,
+        course_id: course.id,
+        room: r.room,
+        day_of_week: r.day_of_week,
+        start_time: r.start_time,
+        end_time: r.end_time,
+        semester,
+      },
+      course,
+    )
+    return [
+      {
+        id: `preview-${i}`,
+        lecture_id: `preview-${i}`,
+        google_event_id: null,
+        lecture,
+      },
+    ]
+  })
+
+  async function commitTimetable() {
     const admin = getProvider().admin
     setSaving(true)
     try {
-      if (kind === 'calendar') {
-        if (chosenEvents.length === 0) {
-          toast(copy.adminImportNothing, 'warning')
-          return
-        }
-        // The term the calendar describes has to exist before its entries can
-        // reference it.
-        if (proposed) await ensureSemester(proposed)
-        const result = await admin.bulkImportAcademicEvents(
-          chosenEvents.map(({ key: _key, include: _include, warnings: _warnings, ...row }) => row),
-        )
-        toast(
-          copy.adminImportDone(result.created, result.errors.length),
-          result.errors.length ? 'warning' : 'success',
-        )
-      } else {
-        if (chosenLectures.length === 0) {
-          toast(copy.adminImportNothing, 'warning')
-          return
-        }
-        let updated = 0
-        let failed = 0
-        // Kept so the toast can say *why* rows failed. Every row carries the
-        // same semester, so a bad term fails all of them identically — a bare
-        // "0 updated, 43 failed" would leave the admin with nothing to act on.
-        let firstError: string | null = null
-        for (const row of chosenLectures) {
-          try {
-            const { id: _id, ...input } = row.match.lecture
-            await admin.updateLecture(row.match.lecture.id, { ...input, semester })
-            updated++
-          } catch (e) {
-            failed++
-            firstError ??= e instanceof Error ? e.message : String(e)
-          }
-        }
-        toast(
-          copy.adminImportSyncDone(updated, failed, firstError),
-          failed ? 'warning' : 'success',
-        )
-      }
+      const rows: LectureInput[] = approved.map((r) => ({
+        course_id: r.course_id,
+        room: r.room,
+        day_of_week: r.day_of_week,
+        start_time: r.start_time,
+        end_time: r.end_time,
+        semester,
+      }))
+      const result = await admin.replaceSemesterSchedule(semester, rows)
+      toast(
+        copy.adminImportReplaceDone(result.deleted, result.created, result.errors.length),
+        result.errors.length ? 'warning' : 'success',
+      )
+      setConfirming(false)
+      reset()
+      setPages(null)
+    } catch (e) {
+      toast(e instanceof Error ? e.message : copy.adminError, 'error')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function commitCalendar() {
+    const admin = getProvider().admin
+    if (chosenEvents.length === 0) {
+      toast(copy.adminImportNothing, 'warning')
+      return
+    }
+    setSaving(true)
+    try {
+      // The term the calendar describes has to exist before its entries can
+      // reference it.
+      if (proposed) await ensureSemester(proposed)
+      const result = await admin.bulkImportAcademicEvents(
+        chosenEvents.map(({ key: _key, include: _include, warnings: _warnings, ...row }) => row),
+      )
+      toast(
+        copy.adminImportDone(result.created, result.errors.length),
+        result.errors.length ? 'warning' : 'success',
+      )
       reset()
       setPages(null)
     } catch (e) {
@@ -336,17 +429,31 @@ export function AdminImport() {
         </div>
       )}
 
-      {kind === 'timetable' && lectureRows.length > 0 && (
+      {kind === 'timetable' && lectures.length > 0 && (
         <TimetableReview
-          rows={lectureRows}
+          rows={lectures}
+          courses={courses}
           sheets={sheets}
           semester={semester}
           semesters={semesters}
+          approvedCount={approved.length}
           onSemester={setSemester}
           onChange={setLecture}
+          onAll={setAll}
           preview={previewEntries}
           saving={saving}
-          onCommit={commit}
+          onCommit={() => setConfirming(true)}
+        />
+      )}
+
+      {confirming && (
+        <ReplaceConfirmModal
+          semester={semester}
+          existing={existingCount}
+          incoming={approved.length}
+          saving={saving}
+          onCancel={() => setConfirming(false)}
+          onConfirm={commitTimetable}
         />
       )}
 
@@ -356,7 +463,7 @@ export function AdminImport() {
           proposed={proposed}
           onChange={setEvent}
           saving={saving}
-          onCommit={commit}
+          onCommit={commitCalendar}
         />
       )}
     </section>
@@ -366,12 +473,15 @@ export function AdminImport() {
 // --- Timetable review ------------------------------------------------------
 
 interface TimetableReviewProps {
-  rows: ReviewRow[]
+  rows: LectureRow[]
+  courses: Course[]
   sheets: ParsedSheet[]
   semester: string
   semesters: AdminSemester[]
+  approvedCount: number
   onSemester: (value: string) => void
-  onChange: (key: string, patch: Partial<LectureRow>) => void
+  onChange: (key: string, decision: Decision) => void
+  onAll: (state: RowState) => void
   preview: ScheduleEntry[]
   saving: boolean
   onCommit: () => void
@@ -379,17 +489,30 @@ interface TimetableReviewProps {
 
 function TimetableReview({
   rows,
+  courses,
   sheets,
   semester,
   semesters,
+  approvedCount,
   onSemester,
   onChange,
+  onAll,
   preview,
   saving,
   onCommit,
 }: TimetableReviewProps) {
-  const flagged = rows.filter((r) => r.warnings.length > 0 || r.match.status !== 'matched')
-  const included = rows.filter((r) => r.include && r.match.status === 'matched').length
+  const needsAttention = rows.filter((r) => r.course_id === '').length
+
+  // One option list for every row's dropdown, built once. The code is shown
+  // beside the name because a lecture and its lab groups read almost alike.
+  const options = useMemo(
+    () =>
+      courses.map((c) => ({
+        value: c.id,
+        label: `${c.course_name} · ${c.course_code}`,
+      })),
+    [courses],
+  )
 
   return (
     <div className="mt-6">
@@ -398,31 +521,47 @@ function TimetableReview({
           <h3 className="text-[15px] font-semibold text-ink">
             {copy.adminImportReviewLectures}
           </h3>
-          <p className="mt-1 max-w-[70ch] text-sm text-muted">{copy.adminImportReviewHint}</p>
+          <p className="mt-1 max-w-[70ch] text-sm text-muted">
+            {copy.adminImportTimetableIntro}
+          </p>
+          <p className="mt-1 max-w-[70ch] text-sm text-muted">
+            {copy.adminImportReviewHint}
+          </p>
         </div>
-        <Button loading={saving} onClick={onCommit} disabled={included === 0 || semester === ''}>
-          {copy.adminImportApplySemester}
+        <Button
+          loading={saving}
+          onClick={onCommit}
+          disabled={approvedCount === 0 || semester === ''}
+        >
+          {copy.adminImportCommit}
         </Button>
       </div>
 
-      <div className="mt-4 max-w-[320px]">
-        <Select
-          label={copy.adminTabSemesters}
-          value={semester}
-          onChange={(e) => onSemester(e.target.value)}
-          placeholder={copy.adminImportPickSemester}
-          options={semesters.map((s) => ({ value: s.name, label: s.name }))}
-        />
+      <div className="mt-4 flex flex-wrap items-end gap-3">
+        <div className="max-w-[320px] flex-1">
+          <Select
+            label={copy.adminTabSemesters}
+            value={semester}
+            onChange={(e) => onSemester(e.target.value)}
+            placeholder={copy.adminImportPickSemester}
+            options={semesters.map((s) => ({ value: s.name, label: s.name }))}
+          />
+        </div>
+        <Button variant="outline" onClick={() => onAll('approved')}>
+          {copy.adminImportApproveAll}
+        </Button>
+        <Button variant="outline" onClick={() => onAll('skipped')}>
+          {copy.adminImportSkipAll}
+        </Button>
       </div>
 
-      {flagged.length > 0 && (
-        <p className="mt-3 text-sm text-muted">
-          {copy.adminImportWarnings}: {flagged.length}
-        </p>
-      )}
+      <p className="mt-3 text-sm text-muted">
+        {copy.adminImportCounts(approvedCount, rows.length)}
+        {needsAttention > 0 && ` · ${copy.adminImportWarnings}: ${needsAttention}`}
+      </p>
 
       <div className="mt-4 grid gap-6 xl:grid-cols-[minmax(0,1fr)_420px]">
-        <div className="min-w-0 overflow-x-auto">
+        <div className="min-w-0">
           {sheets.map((sheet) => {
             const sheetRows = rows.filter((r) => r.page === sheet.page)
             if (sheetRows.length === 0) return null
@@ -438,7 +577,12 @@ function TimetableReview({
                 ))}
                 <div className="mt-2 flex flex-col gap-2">
                   {sheetRows.map((row) => (
-                    <LectureRowEditor key={row.key} row={row} onChange={onChange} />
+                    <LectureRowEditor
+                      key={row.key}
+                      row={row}
+                      options={options}
+                      onChange={onChange}
+                    />
                   ))}
                 </div>
               </div>
@@ -458,64 +602,76 @@ function TimetableReview({
   )
 }
 
+/**
+ * One parsed cell awaiting a decision.
+ *
+ * The left half is what the PDF says, shown as plain text — it is evidence, not
+ * a form. The right half is the only thing the admin controls: which existing
+ * course this is, and whether it goes in.
+ */
 function LectureRowEditor({
   row,
+  options,
   onChange,
 }: {
-  row: ReviewRow
-  onChange: (key: string, patch: Partial<LectureRow>) => void
+  row: LectureRow
+  options: { value: string; label: string }[]
+  onChange: (key: string, decision: Decision) => void
 }) {
-  const matched = row.match.status === 'matched'
+  const approved = row.state === 'approved' && row.course_id !== ''
 
   return (
     <div className="rounded-card border border-line p-3">
-      <div className="flex items-start gap-3">
-        <label className="mt-1 flex items-center gap-2 text-sm text-muted">
-          <input
-            type="checkbox"
-            checked={row.include && matched}
-            disabled={!matched}
-            onChange={(e) => onChange(row.key, { include: e.target.checked })}
-            aria-label={`${copy.adminImportInclude} ${row.course_name}`}
-          />
-        </label>
+      <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+        <div className="min-w-0">
+          <p className="text-[11px] font-medium uppercase tracking-wide text-muted">
+            {copy.adminImportFromPdf}
+          </p>
+          <p className="mt-1 truncate text-sm font-medium text-ink">{row.course_name}</p>
+          <p className="mt-0.5 text-sm text-muted">
+            {row.day_of_week} {row.start_time}–{row.end_time}
+            {row.room ? ` · ${row.room}` : ''}
+          </p>
+          {row.professor && <p className="text-sm text-muted">{row.professor}</p>}
+        </div>
 
-        <div className="grid min-w-0 flex-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
-          <Input
-            label="Course name"
-            value={row.course_name}
-            onChange={(e) => onChange(row.key, { course_name: e.target.value })}
-          />
-          <Input
-            label="Professor"
-            value={row.professor}
-            onChange={(e) => onChange(row.key, { professor: e.target.value })}
-          />
+        <div className="min-w-0">
           <Select
-            label="Day"
-            value={row.day_of_week}
-            options={DAYS.map((d) => ({ value: d, label: d }))}
+            label={copy.adminImportCourse}
+            value={row.course_id}
+            placeholder={copy.adminImportPickCourse}
+            options={options}
             onChange={(e) =>
-              onChange(row.key, { day_of_week: e.target.value as DayOfWeek })
+              onChange(row.key, {
+                course_id: e.target.value,
+                // Choosing a course is itself the approval — an admin who just
+                // fixed a bad match should not have to tick a box as well.
+                state: e.target.value ? 'approved' : 'skipped',
+              })
             }
           />
-          <Input
-            label="Start"
-            type="time"
-            value={row.start_time}
-            onChange={(e) => onChange(row.key, { start_time: e.target.value })}
-          />
-          <Input
-            label="End"
-            type="time"
-            value={row.end_time}
-            onChange={(e) => onChange(row.key, { end_time: e.target.value })}
-          />
-          <Input
-            label="Room"
-            value={row.room ?? ''}
-            onChange={(e) => onChange(row.key, { room: e.target.value || null })}
-          />
+          <div className="mt-2 flex items-center gap-3">
+            <label className="flex items-center gap-2 text-sm text-body">
+              <input
+                type="checkbox"
+                checked={approved}
+                disabled={row.course_id === ''}
+                onChange={(e) =>
+                  onChange(row.key, {
+                    course_id: row.course_id,
+                    state: e.target.checked ? 'approved' : 'skipped',
+                  })
+                }
+                aria-label={`${copy.adminImportApprove} ${row.course_name}`}
+              />
+              {approved ? copy.adminImportApproved : copy.adminImportSkipped}
+            </label>
+            {row.course_id !== '' && (
+              <span className="text-[11px] uppercase tracking-wide text-muted">
+                {row.autoMatched ? copy.adminImportAutoMatched : copy.adminImportChanged}
+              </span>
+            )}
+          </div>
         </div>
       </div>
 
@@ -524,20 +680,60 @@ function LectureRowEditor({
           {w}
         </p>
       ))}
-      {row.match.status === 'matched' && (
-        <p className="mt-2 text-sm text-muted">
-          Matches {row.match.lecture.course_code} · {row.match.lecture.professor}
-        </p>
-      )}
-      {row.match.status === 'unmatched' && (
+      {row.match.status === 'unmatched' && row.course_id === '' && (
         <p className="mt-2 text-sm text-danger">{copy.adminImportNoMatch}</p>
       )}
-      {row.match.status === 'ambiguous' && (
+      {row.match.status === 'ambiguous' && row.course_id === '' && (
         <p className="mt-2 text-sm text-danger">
           {copy.adminImportAmbiguousMatch(row.match.candidates.length)}
         </p>
       )}
     </div>
+  )
+}
+
+// --- Replace confirmation --------------------------------------------------
+
+/**
+ * Committing a timetable deletes the term's existing lectures, and with them
+ * the Google Calendar events of everyone enrolled. That is the intended
+ * behaviour, and it is also irreversible, so it is confirmed rather than
+ * assumed.
+ */
+function ReplaceConfirmModal({
+  semester,
+  existing,
+  incoming,
+  saving,
+  onCancel,
+  onConfirm,
+}: {
+  semester: string
+  existing: number
+  incoming: number
+  saving: boolean
+  onCancel: () => void
+  onConfirm: () => void
+}) {
+  return (
+    <Modal open onClose={onCancel} labelledBy="replace-title" className="max-w-[460px]">
+      <div className="px-5 py-4">
+        <h2 id="replace-title" className="text-[17px] font-semibold text-ink">
+          {copy.adminImportReplaceTitle}
+        </h2>
+        <p className="mt-2 text-sm text-body">
+          {copy.adminImportReplaceBody(semester, existing, incoming)}
+        </p>
+        <div className="mt-5 flex justify-end gap-2">
+          <Button variant="ghost" onClick={onCancel}>
+            {copy.adminCancel}
+          </Button>
+          <Button loading={saving} onClick={onConfirm}>
+            {copy.adminImportReplaceConfirm}
+          </Button>
+        </div>
+      </div>
+    </Modal>
   )
 }
 

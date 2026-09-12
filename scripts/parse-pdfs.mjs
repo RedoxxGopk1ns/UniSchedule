@@ -84,7 +84,7 @@ function printReport() {
   }
 }
 
-/** Emits the LECTURES / ACADEMIC_EVENTS arrays for src/lib/data/seed.ts. */
+/** Emits the COURSES / SCHEDULE / ACADEMIC_EVENTS arrays for src/lib/data/seed.ts. */
 function printSeed() {
   const q = (v) => (v === null || v === undefined ? 'null' : `'${String(v).replace(/'/g, "\\'")}'`)
   const term = calendar.springSemester
@@ -95,7 +95,52 @@ function printSeed() {
   console.log(`  end_date: ${q(term.end_date)},`)
   console.log('}\n')
 
-  console.log('export const LECTURES: Lecture[] = [')
+  // One course per distinct title — the same identity a timetable import
+  // matches on. A course that meets twice a week is one row here and two in
+  // SCHEDULE below. Where rows of the same title disagree on a field (the PDF
+  // spells one lecturer with a Latin 'A' and a Greek 'Α'), the majority wins.
+  const byTitle = new Map()
+  for (const l of timetable.lectures) {
+    if (!byTitle.has(l.course_name)) byTitle.set(l.course_name, [])
+    byTitle.get(l.course_name).push(l)
+  }
+
+  const COURSE_FIELDS = [
+    'course_code',
+    'course_name',
+    'professor',
+    'department',
+    'color_tag',
+    'subject',
+    'is_mandatory',
+    'study_year',
+  ]
+  const courseIdFor = new Map()
+  const courses = []
+  let n = 0
+  for (const [title, group] of byTitle) {
+    const course = { id: courseUuidFor(n++) }
+    for (const f of COURSE_FIELDS) {
+      const counts = new Map()
+      for (const r of group) counts.set(r[f], (counts.get(r[f]) ?? 0) + 1)
+      course[f] = [...counts.entries()].sort((a, b) => b[1] - a[1])[0][0]
+    }
+    courses.push(course)
+    courseIdFor.set(title, course.id)
+  }
+
+  console.log('export const COURSES: Course[] = [')
+  for (const c of courses) {
+    console.log(
+      `  { id: ${q(c.id)}, course_code: ${q(c.course_code)}, course_name: ${q(c.course_name)}, ` +
+        `professor: ${q(c.professor)}, department: ${q(c.department)}, ` +
+        `color_tag: ${q(c.color_tag)}, subject: ${q(c.subject)}, ` +
+        `is_mandatory: ${c.is_mandatory}, study_year: ${c.study_year} },`,
+    )
+  }
+  console.log(']\n')
+
+  console.log('export const SCHEDULE: LectureRow[] = [')
   let year = null
   timetable.lectures.forEach((l, i) => {
     if (l.study_year !== year) {
@@ -103,11 +148,10 @@ function printSeed() {
       console.log(`  // Year ${year} — ${year * 2}ο εξάμηνο`)
     }
     console.log(
-      `  { id: ${q(uuidFor(i))}, course_code: ${q(l.course_code)}, course_name: ${q(l.course_name)}, ` +
-        `professor: ${q(l.professor)}, room: ${q(l.room)}, day_of_week: ${q(l.day_of_week)}, ` +
-        `start_time: ${q(l.start_time)}, end_time: ${q(l.end_time)}, semester: ${q(l.semester)}, ` +
-        `department: ${q(l.department)}, color_tag: ${q(l.color_tag)}, subject: ${q(l.subject)}, ` +
-        `is_mandatory: ${l.is_mandatory}, study_year: ${l.study_year} },`,
+      `  { id: ${q(uuidFor(i))}, course_id: ${q(courseIdFor.get(l.course_name))}, ` +
+        `room: ${q(l.room)}, day_of_week: ${q(l.day_of_week)}, ` +
+        `start_time: ${q(l.start_time)}, end_time: ${q(l.end_time)}, ` +
+        `semester: SEMESTER.name },`,
     )
   })
   console.log(']\n')
@@ -130,4 +174,9 @@ function printSeed() {
 function uuidFor(n) {
   const hex = String(n + 1).padStart(12, '0')
   return `00000000-0000-4000-8000-${hex}`
+}
+
+/** Courses live in their own id block, clear of lectures and calendar rows. */
+function courseUuidFor(n) {
+  return `00000000-0000-4000-8000-0000000003${String(n + 1).padStart(2, '0')}`
 }

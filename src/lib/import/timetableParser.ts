@@ -26,15 +26,33 @@
  * own `warnings`, and nothing here throws: the admin review table is what turns
  * a good-enough parse into correct data.
  */
-import type { DayOfWeek, LectureInput } from '../data/types'
+import type { CourseInput, DayOfWeek } from '../data/types'
 import { fromMinutes } from '../time'
 import { foldGreek, parseSemesterHeading } from './greek'
 import type { PdfItem, PdfPage } from './pdfText'
 
-/** A lecture as parsed, with everything the review UI needs to flag it. */
-export interface ParsedLecture extends LectureInput {
+/**
+ * A cell of the timetable as parsed, with everything the review UI needs.
+ *
+ * It spans both halves of the split schema — the course fields (`CourseInput`)
+ * and the scheduling ones — because the PDF itself does. Only the scheduling
+ * half is ever committed: the review screen matches the parsed title against an
+ * existing course and writes that course's id, so `course_code`, `subject` and
+ * the rest are read by the admin and by the seed generator
+ * (scripts/parse-pdfs.mjs --seed), never sent to the database.
+ *
+ * `ects` is omitted rather than nulled: the timetable does not publish credit
+ * weights at all, and a field the parser can never fill has no business being
+ * on its output type.
+ */
+export interface ParsedLecture extends Omit<CourseInput, 'ects'> {
   /** Stable within one parse — used as a React key before the row has an id. */
   key: string
+  room: string | null
+  day_of_week: DayOfWeek
+  start_time: string
+  end_time: string
+  semester: string
   warnings: string[]
   /** Which page and cell it came from, so the admin can find it in the PDF. */
   source: { page: number; semesterNumber: number | null }
@@ -80,14 +98,37 @@ const COLOR_BY_YEAR: Record<number, string> = {
  */
 const SUBJECT_RULES: [RegExp, string][] = [
   [/ΑΣΦΑΛΕΙΑ|ΚΡΥΠΤΟΓΡΑΦ/, 'Ασφάλεια'],
-  [/ΜΗΧΑΝΙΚΗ ΜΑΘΗΣΗ|ΕΙΚΟΝΑΣ|ΦΥΣΙΚΗΣ ΓΛΩΣΣΑΣ|ΝΟΗΜΟΣΥΝΗ/, 'Τεχνητή νοημοσύνη'],
-  [/ΒΑΣΕΙΣ ΔΕΔΟΜΕΝΩΝ|ΑΝΑΚΤΗΣΗ ΠΛΗΡΟΦΟΡΙΑΣ|ΟΓΚΟΥ ΔΕΔΟΜΕΝΩΝ/, 'Δεδομένα'],
-  [/ΔΙΚΤΥ|ΤΗΛΕΠΙΚΟΙΝΩΝ|ΔΙΑΔΙΚΤΥΟ|ΤΗΛΕΜΑΤΙΚ|ΝΕΦΟΥΣ|ΥΠΗΡΕΣΙΕΣ ΚΑΙ ΣΥΣΤΗΜΑΤΑ/, 'Δίκτυα και τηλεπικοινωνίες'],
-  [/ΠΡΟΓΡΑΜΜΑΤΙΣΜΟΣ|ΜΕΤΑΓΛΩΤΤΙΣΤΕΣ|ΑΝΤΙΚΕΙΜΕΝΟΣΤΡΕΦ/, 'Προγραμματισμός'],
-  [/ΑΛΓΟΡΙΘΜΟΙ|ΠΟΛΥΠΛΟΚΟΤΗΤΑ|ΜΑΘΗΜΑΤΙΚΑ|ΠΙΘΑΝΟΤΗΤΕΣ|ΣΤΑΤΙΣΤΙΚ/, 'Αλγόριθμοι και μαθηματικά'],
-  [/ΠΛΗΡΟΦΟΡΙΑΚΑ ΣΥΣΤΗΜΑΤΑ|ΕΠΙΧΕΙΡΕΙΝ|ΑΠΟΤΙΜΗΣΗ|ΑΠΟΦΑΣΕΩΝ|ΛΟΓΙΣΜΙΚΟΥ|ΙΣΤΟΥ/, 'Πληροφοριακά συστήματα'],
-  [/ΑΡΧΙΤΕΚΤΟΝΙΚΗ|ΠΑΡΑΛΛΗΛΕΣ|ΣΗΜΑΤΑ|ΗΛΕΚΤΡΟΝΙΚΗΣ|ΠΡΟΣΟΜΟΙΩΣΗ|ΣΥΣΤΗΜΑΤΩΝ/, 'Συστήματα και υλικό'],
-  [/ΔΙΔΑΚΤΙΚΗ|ΠΑΙΔΑΓΩΓΙΚ|ΨΥΧΟΛΟΓΙΑ|ΚΟΙΝΩΝΙΑ|ΜΕΘΟΔΟΛΟΓΙΑ|ΕΡΕΥΝΑΣ/, 'Εκπαίδευση και κοινωνία'],
+  [/ΜΗΧΑΝΙΚΗ ΜΑΘΗΣΗ|ΕΙΚΟΝΑΣ|ΦΥΣΙΚΗΣ ΓΛΩΣΣΑΣ|ΝΟΗΜΟΣΥΝΗ|ΟΡΑΣΗ/, 'Τεχνητή νοημοσύνη'],
+  [
+    /ΒΑΣΕΙΣ ΔΕΔΟΜΕΝΩΝ|ΑΝΑΚΤΗΣΗ ΠΛΗΡΟΦΟΡΙΑΣ|ΟΓΚΟΥ ΔΕΔΟΜΕΝΩΝ|ΕΞΟΡΥΞΗ|ΓΡΑΦΗΜΑΤΩΝ/,
+    'Δεδομένα',
+  ],
+  [
+    /ΔΙΚΤΥ|ΤΗΛΕΠΙΚΟΙΝΩΝ|ΔΙΑΔΙΚΤΥΟ|ΤΗΛΕΜΑΤΙΚ|ΝΕΦΟΥΣ|ΥΠΗΡΕΣΙΕΣ ΚΑΙ ΣΥΣΤΗΜΑΤΑ|ΟΠΤΙΚΕΣ ΕΠΙΚΟΙΝΩΝΙΕΣ|ΚΙΝΗΤΩΝ ΕΠΙΚΟΙΝΩΝΙΩΝ|ΔΟΡΥΦΟΡΙΚΕΣ/,
+    'Δίκτυα και τηλεπικοινωνίες',
+  ],
+  // ΠΡΟΓΡΑΜΜΑΤΙΣΜ, not ΠΡΟΓΡΑΜΜΑΤΙΣΜΟΣ: the genitive ('Αρχές Γλωσσών
+  // Προγραμματισμού') is how half the catalogue spells it.
+  [
+    /ΠΡΟΓΡΑΜΜΑΤΙΣΜ|ΜΕΤΑΓΛΩΤΤΙΣΤΕΣ|ΑΝΤΙΚΕΙΜΕΝΟΣΤΡΕΦ|ΚΙΝΗΤΩΝ ΕΦΑΡΜΟΓΩΝ|DEVOPS|FRONTEND/,
+    'Προγραμματισμός',
+  ],
+  [
+    /ΑΛΓΟΡΙΘΜΟΙ|ΠΟΛΥΠΛΟΚΟΤΗΤΑ|ΜΑΘΗΜΑΤΙΚΑ|ΠΙΘΑΝΟΤΗΤΕΣ|ΣΤΑΤΙΣΤΙΚ|ΔΟΜΕΣ ΔΕΔΟΜΕΝΩΝ/,
+    'Αλγόριθμοι και μαθηματικά',
+  ],
+  [
+    /ΠΛΗΡΟΦΟΡΙΑΚΑ ΣΥΣΤΗΜΑΤΑ|ΕΠΙΧΕΙΡΕΙΝ|ΑΠΟΤΙΜΗΣΗ|ΑΠΟΦΑΣΕΩΝ|ΛΟΓΙΣΜΙΚΟΥ|ΙΣΤΟΥ|ΕΠΙΧΕΙΡΗΜΑΤΙΚ|ΟΙΚΟΝΟΜΙΚΑ|ΚΑΙΝΟΤΟΜΙΑ|ΔΙΟΙΚΗΣΗ|ΔΙΑΚΥΒΕΡΝΗΣΗ/,
+    'Πληροφοριακά συστήματα',
+  ],
+  [
+    /ΑΡΧΙΤΕΚΤΟΝΙΚΗ|ΠΑΡΑΛΛΗΛΕΣ|ΣΗΜΑΤΑ|ΗΛΕΚΤΡΟΝΙΚΗΣ|ΠΡΟΣΟΜΟΙΩΣΗ|ΣΥΣΤΗΜΑΤΩΝ|ΛΟΓΙΚΗ ΣΧΕΔΙΑΣΗ|ΛΕΙΤΟΥΡΓΙΚΑ ΣΥΣΤΗΜΑΤΑ|ΚΑΤΑΝΕΜΗΜΕΝΑ|ΕΝΣΩΜΑΤΩΜΕΝΑ/,
+    'Συστήματα και υλικό',
+  ],
+  [
+    /ΔΙΔΑΚΤΙΚΗ|ΠΑΙΔΑΓΩΓΙΚ|ΨΥΧΟΛΟΓΙΑ|ΚΟΙΝΩΝΙΑ|ΜΕΘΟΔΟΛΟΓΙΑ|ΕΡΕΥΝΑΣ|ΕΚΠΑΙΔΕΥΣΗ/,
+    'Εκπαίδευση και κοινωνία',
+  ],
 ]
 
 export function guessSubject(courseName: string): string | null {
@@ -584,6 +625,8 @@ function parseDay(segments: Line[], ctx: DayContext): ParsedLecture[] {
       subject: guessSubject(cell.course_name),
       is_mandatory: cell.is_mandatory,
       study_year: ctx.studyYear,
+      // Straight off the sheet's own "ΣΤ' ΕΞΑΜΗΝΟ (6ο)" heading.
+      semester_number: ctx.semesterNumber,
       warnings,
       source: { page: ctx.pageNumber, semesterNumber: ctx.semesterNumber },
     })
