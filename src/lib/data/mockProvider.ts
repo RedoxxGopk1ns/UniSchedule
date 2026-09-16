@@ -135,6 +135,7 @@ export function resetMockCatalogue() {
   // behind changes what the next test is allowed to do — the last-admin guard
   // in setUserRole counts them.
   mockUsers = seedUsers()
+  syncDemoRole()
 }
 
 /**
@@ -248,12 +249,25 @@ function seedUsers(): AdminUser[] {
 let mockUsers: AdminUser[] = seedUsers()
 
 /**
+ * The demo user appears twice: as the signed-in session (`state.isAdmin`) and
+ * as a row in the admin Users table. The fixture row is written with no role,
+ * so without this the overview read "Admins 0" while the same user was browsing
+ * the admin screens. `state.isAdmin` is the authority; the row follows it.
+ */
+function syncDemoRole() {
+  mockUsers = mockUsers.map((u) =>
+    u.id === DEMO_USER.id ? { ...u, role: state.isAdmin ? 'admin' : null } : u,
+  )
+}
+
+/**
  * Test/demo hook: flip the demo user's admin flag. Called by tests before
  * mounting, and honoured from VITE_MOCK_ADMIN so the admin UI can be explored
  * in a local mock deployment.
  */
 export function setMockAdmin(value: boolean) {
   state = { ...state, isAdmin: value }
+  syncDemoRole()
   persist()
 }
 
@@ -277,6 +291,7 @@ function load(): MockState {
 }
 
 let state: MockState = load()
+syncDemoRole()
 
 /**
  * Restores the demo user's session state — enrolment, passed courses, study
@@ -761,6 +776,12 @@ export const mockProvider: DataProvider = {
       }
       const i = mockUsers.findIndex((u) => u.id === id)
       if (i >= 0) mockUsers[i] = { ...mockUsers[i]!, role }
+      // Changing the demo user's own role changes the session's too, as it
+      // would for a real user whose next token carries the new claim.
+      if (id === DEMO_USER.id) {
+        state = { ...state, isAdmin: role === 'admin' }
+        persist()
+      }
     },
 
     async deleteUser(id: string) {
